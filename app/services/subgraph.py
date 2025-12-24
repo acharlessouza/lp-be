@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 
 import httpx
 
@@ -31,6 +32,23 @@ class UniswapV3SubgraphClient:
         if not pool or pool.get("tick") is None:
             raise SubgraphError("Pool not found in subgraph.")
         return int(pool["tick"])
+
+    def get_current_price(self, *, network: str, pool_address: str) -> Decimal:
+        endpoint = self._get_endpoint(network)
+        query = {
+            "query": f'{{ pool(id: "{pool_address.lower()}") {{ token1Price }} }}',
+        }
+        with httpx.Client(timeout=self.timeout_seconds) as client:
+            response = client.post(endpoint, json=query)
+            response.raise_for_status()
+            payload = response.json()
+        if "errors" in payload:
+            raise SubgraphError("Subgraph error while fetching current price.")
+        pool = payload.get("data", {}).get("pool")
+        price_value = pool.get("token1Price") if pool else None
+        if price_value is None:
+            raise SubgraphError("Pool price not found in subgraph.")
+        return Decimal(str(price_value))
 
     def _get_endpoint(self, network: str) -> str:
         if not self.graph_api_key:

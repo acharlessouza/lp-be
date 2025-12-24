@@ -14,10 +14,12 @@ from .schemas.liquidity_distribution import (
     LiquidityDistributionResponse,
 )
 from .repositories.pools import PoolRepository
+from .repositories.pool_price import PoolPriceRepository
 from .repositories.liquidity_distribution import LiquidityDistributionRepository
 from .services.allocation import AllocationService
 from .services.pricing import CoingeckoPriceProvider, PriceLookupError, PriceOverrides, PriceService
 from .services.subgraph import SubgraphError, UniswapV3SubgraphClient
+from .schemas.pool_price import PoolPricePoint, PoolPriceResponse, PoolPriceStats
 
 app = FastAPI(title="LP API")
 app.add_middleware(
@@ -57,6 +59,14 @@ def get_liquidity_distribution_repository() -> LiquidityDistributionRepository:
     return LiquidityDistributionRepository(engine)
 
 
+def get_pool_price_repository() -> PoolPriceRepository:
+    settings = get_settings()
+    if not settings.postgres_dsn:
+        raise HTTPException(status_code=500, detail="POSTGRES_DSN is required.")
+    engine = get_engine(settings.postgres_dsn)
+    return PoolPriceRepository(engine)
+
+
 def get_subgraph_client() -> UniswapV3SubgraphClient:
     settings = get_settings()
     return UniswapV3SubgraphClient(
@@ -69,6 +79,10 @@ def get_subgraph_client() -> UniswapV3SubgraphClient:
 
 def _dec_to_str(value) -> str:
     return str(value) if value is not None else ""
+
+
+def _dec_to_str_or_none(value) -> str | None:
+    return str(value) if value is not None else None
 
 
 @app.post("/v1/allocate", response_model=AllocationResponse)
@@ -165,4 +179,45 @@ def liquidity_distribution(
         ),
         current_tick=current_tick,
         data=data_out,
+    )
+
+
+@app.get("/api/pool-price", response_model=PoolPriceResponse)
+def pool_price(
+    pool_id: int,
+    days: int,
+    _token: str = Depends(require_jwt),
+    pool_repo: PoolRepository = Depends(get_pool_repository),
+    price_repo: PoolPriceRepository = Depends(get_pool_price_repository),
+    subgraph_client: UniswapV3SubgraphClient = Depends(get_subgraph_client),
+):
+    if days <= 0:
+        raise HTTPException(status_code=400, detail="days must be a positive integer.")
+    pool = pool_repo.get_by_id(pool_id)
+    if not pool:
+        raise HTTPException(status_code=404, detail="Pool not found.")
+
+    stats_row = price_repo.get_stats(pool_id=pool.id, days=days)
+    series_rows = price_repo.get_series(pool_id=pool.id, days=days)
+    try:
+        current_price = subgraph_client.get_current_price(
+            network=pool.network,
+            pool_address=pool.pool_address,
+        )
+    except SubgraphError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return PoolPriceResponse(
+        pool_id=pool.id,
+        days=days,
+        stats=PoolPriceStats(
+            min=_dec_to_str_or_none(stats_row.min_price),
+            max=_dec_to_str_or_none(stats_row.max_price),
+            avg=_dec_to_str_or_none(stats_row.avg_price),
+            price=_dec_to_str_or_none(current_price),
+        ),
+        series=[
+            PoolPricePoint(timestamp=row.timestamp.isoformat(), price=_dec_to_str(row.price))
+            for row in series_rows
+        ],
     )
