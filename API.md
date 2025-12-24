@@ -66,6 +66,31 @@ Resposta:
 }
 ```
 
+## POST /api/liquidity-distribution
+Alias: `/v1/liquidity-distribution`.
+Entrada:
+```json
+{
+  "pool_id": 572,
+  "snapshot_date": "2025-12-24",
+  "current_tick": 0,
+  "tick_range": 6000,
+  "range_min": 2833.5,
+  "range_max": 3242.4
+}
+```
+
+Resposta:
+```json
+{
+  "pool": { "token0": "WETH", "token1": "USDT" },
+  "current_tick": -198000,
+  "data": [
+    { "tick": -198120, "liquidity": "2226...", "price": 2927.79 }
+  ]
+}
+```
+
 ## Precificacao de tokens
 - A API consulta o preco atual por `token` + `rede`.
 - Prioridade:

@@ -1,16 +1,31 @@
 from __future__ import annotations
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 from .core.auth import require_jwt
 from .core.config import get_settings
-from .core.db import get_session_factory
+from .core.db import get_engine
 from .schemas.allocation import AllocationRequest, AllocationResponse
+from .schemas.liquidity_distribution import (
+    LiquidityDistributionPoint,
+    LiquidityDistributionPool,
+    LiquidityDistributionRequest,
+    LiquidityDistributionResponse,
+)
 from .repositories.pools import PoolRepository
+from .repositories.liquidity_distribution import LiquidityDistributionRepository
 from .services.allocation import AllocationService
 from .services.pricing import CoingeckoPriceProvider, PriceLookupError, PriceOverrides, PriceService
+from .services.subgraph import SubgraphError, UniswapV3SubgraphClient
 
 app = FastAPI(title="LP API")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def get_price_service() -> PriceService:
     settings = get_settings()
@@ -30,8 +45,30 @@ def get_pool_repository() -> PoolRepository:
     settings = get_settings()
     if not settings.postgres_dsn:
         raise HTTPException(status_code=500, detail="POSTGRES_DSN is required.")
-    session_factory = get_session_factory(settings.postgres_dsn)
-    return PoolRepository(session_factory)
+    engine = get_engine(settings.postgres_dsn)
+    return PoolRepository(engine)
+
+
+def get_liquidity_distribution_repository() -> LiquidityDistributionRepository:
+    settings = get_settings()
+    if not settings.postgres_dsn:
+        raise HTTPException(status_code=500, detail="POSTGRES_DSN is required.")
+    engine = get_engine(settings.postgres_dsn)
+    return LiquidityDistributionRepository(engine)
+
+
+def get_subgraph_client() -> UniswapV3SubgraphClient:
+    settings = get_settings()
+    return UniswapV3SubgraphClient(
+        graph_api_key=settings.graph_api_key,
+        graph_gateway_base=settings.graph_gateway_base,
+        subgraph_ids=settings.graph_subgraph_ids,
+        timeout_seconds=settings.graph_request_timeout_seconds,
+    )
+
+
+def _dec_to_str(value) -> str:
+    return str(value) if value is not None else ""
 
 
 @app.post("/v1/allocate", response_model=AllocationResponse)
@@ -77,4 +114,55 @@ def allocate(
         amount_token1=result.amount_token1,
         price_token0_usd=price0,
         price_token1_usd=price1,
+    )
+
+
+@app.post("/api/liquidity-distribution", response_model=LiquidityDistributionResponse)
+@app.post("/v1/liquidity-distribution", response_model=LiquidityDistributionResponse)
+def liquidity_distribution(
+    req: LiquidityDistributionRequest,
+    _token: str = Depends(require_jwt),
+    pool_repo: PoolRepository = Depends(get_pool_repository),
+    dist_repo: LiquidityDistributionRepository = Depends(get_liquidity_distribution_repository),
+    subgraph_client: UniswapV3SubgraphClient = Depends(get_subgraph_client),
+):
+    pool = pool_repo.get_by_id(req.pool_id)
+    if not pool:
+        raise HTTPException(status_code=404, detail="Pool not found.")
+    try:
+        current_tick = subgraph_client.get_current_tick(
+            network=pool.network,
+            pool_address=pool.pool_address,
+        )
+    except SubgraphError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    min_tick = current_tick - req.tick_range
+    max_tick = current_tick + req.tick_range
+
+    rows = dist_repo.get_rows(
+        pool_id=pool.id,
+        snapshot_date=req.snapshot_date,
+        min_tick=min_tick,
+        max_tick=max_tick,
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Tick snapshot not found.")
+
+    data_out = [
+        LiquidityDistributionPoint(
+            tick=row.tick_idx,
+            liquidity=_dec_to_str(row.liquidity_active),
+            price=float(row.price_token1_per_token0),
+        )
+        for row in rows
+    ]
+
+    return LiquidityDistributionResponse(
+        pool=LiquidityDistributionPool(
+            token0=pool.token0_symbol,
+            token1=pool.token1_symbol,
+        ),
+        current_tick=current_tick,
+        data=data_out,
     )
