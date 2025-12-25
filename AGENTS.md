@@ -22,6 +22,7 @@
 - APIs should follow SOLID principles (clear separation of responsibilities, dependency injection, small cohesive modules).
 - Database access must use native SQL (no ORM usage).
 - Any new or updated endpoint must be documented in `API.md` with example request and response payloads.
+- Prompts are only considered finalized when the user explicitly says so; once finalized, move them from `prompts_pendentes/` to `prompts_processados/`.
 
 ## Testing Guidelines
 - No testing framework is configured yet. If adding tests, introduce a `tests/` folder and name files `test_*.py`.

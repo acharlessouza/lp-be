@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal, getcontext
+from math import ceil
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,14 +28,20 @@ from .repositories.pools import PoolRepository
 from .repositories.pool_price import PoolPriceRepository
 from .repositories.liquidity_distribution import LiquidityDistributionRepository
 from .repositories.exchanges import ExchangeRepository
+from .repositories.current_price import CurrentPriceRepository
+from .repositories.current_tick import CurrentTickRepository
 from .repositories.networks import NetworkRepository
 from .repositories.tokens import TokenRepository
+from .repositories.match_ticks import MatchTicksRepository
 from .services.allocation import AllocationService
+from .services.current_price import resolve_current_price
+from .services.current_tick import tick_from_sqrt_price_x96
+from .services.match_ticks import match_prices
 from .services.pricing import CoingeckoPriceProvider, PriceLookupError, PriceOverrides, PriceService
-from .services.subgraph import SubgraphError, UniswapV3SubgraphClient
 from .schemas.exchange import ExchangeResponse
 from .schemas.network import NetworkResponse
 from .schemas.token import TokenResponse
+from .schemas.match_ticks import MatchTicksRequest, MatchTicksResponse
 from .schemas.pool_price import PoolPricePoint, PoolPriceResponse, PoolPriceStats
 from .schemas.pool_summary import PoolSummaryResponse
 from .schemas.pool_detail import PoolDetailResponse
@@ -116,14 +124,28 @@ def get_token_repository() -> TokenRepository:
     return TokenRepository(engine)
 
 
-def get_subgraph_client() -> UniswapV3SubgraphClient:
+def get_current_price_repository() -> CurrentPriceRepository:
     settings = get_settings()
-    return UniswapV3SubgraphClient(
-        graph_api_key=settings.graph_api_key,
-        graph_gateway_base=settings.graph_gateway_base,
-        subgraph_ids=settings.graph_subgraph_ids,
-        timeout_seconds=settings.graph_request_timeout_seconds,
-    )
+    if not settings.postgres_dsn:
+        raise HTTPException(status_code=500, detail="POSTGRES_DSN is required.")
+    engine = get_engine(settings.postgres_dsn)
+    return CurrentPriceRepository(engine)
+
+
+def get_current_tick_repository() -> CurrentTickRepository:
+    settings = get_settings()
+    if not settings.postgres_dsn:
+        raise HTTPException(status_code=500, detail="POSTGRES_DSN is required.")
+    engine = get_engine(settings.postgres_dsn)
+    return CurrentTickRepository(engine)
+
+
+def get_match_ticks_repository() -> MatchTicksRepository:
+    settings = get_settings()
+    if not settings.postgres_dsn:
+        raise HTTPException(status_code=500, detail="POSTGRES_DSN is required.")
+    engine = get_engine(settings.postgres_dsn)
+    return MatchTicksRepository(engine)
 
 
 def _dec_to_str(value) -> str:
@@ -235,18 +257,21 @@ def liquidity_distribution(
     _token: str = Depends(require_jwt),
     pool_repo: PoolRepository = Depends(get_pool_repository),
     dist_repo: LiquidityDistributionRepository = Depends(get_liquidity_distribution_repository),
-    subgraph_client: UniswapV3SubgraphClient = Depends(get_subgraph_client),
+    tick_repo: CurrentTickRepository = Depends(get_current_tick_repository),
 ):
     pool = pool_repo.get_by_id(req.pool_id)
     if not pool:
         raise HTTPException(status_code=404, detail="Pool not found.")
-    try:
-        current_tick = subgraph_client.get_current_tick(
-            network=pool.network,
-            pool_address=pool.pool_address,
-        )
-    except SubgraphError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if req.center_tick is not None:
+        current_tick = req.center_tick
+    else:
+        sqrt_price_x96 = tick_repo.get_latest_sqrt_price_x96(pool_id=pool.id)
+        if sqrt_price_x96 is None:
+            raise HTTPException(status_code=404, detail="Pool price not found.")
+        try:
+            current_tick = tick_from_sqrt_price_x96(sqrt_price_x96)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     min_tick = current_tick - req.tick_range
     max_tick = current_tick + req.tick_range
@@ -279,34 +304,102 @@ def liquidity_distribution(
     )
 
 
+@app.post("/v1/match-ticks", response_model=MatchTicksResponse)
+def match_ticks(
+    req: MatchTicksRequest,
+    _token: str = Depends(require_jwt),
+    match_repo: MatchTicksRepository = Depends(get_match_ticks_repository),
+):
+    if req.min_price <= 0 or req.max_price <= 0:
+        raise HTTPException(status_code=400, detail="min_price and max_price must be positive.")
+    if req.min_price >= req.max_price:
+        raise HTTPException(status_code=400, detail="min_price must be lower than max_price.")
+
+    pool_config = match_repo.get_pool_config(pool_id=req.pool_id)
+    if not pool_config:
+        raise HTTPException(status_code=404, detail="Pool not found.")
+
+    latest_prices = match_repo.get_latest_prices(pool_id=req.pool_id)
+    if not latest_prices:
+        raise HTTPException(status_code=404, detail="Pool price not found.")
+
+    current_price = latest_prices.token1_price
+    if current_price is None and latest_prices.token0_price is not None:
+        if latest_prices.token0_price == 0:
+            raise HTTPException(status_code=400, detail="Invalid pool price.")
+        current_price = 1 / latest_prices.token0_price
+    if current_price is None or current_price <= 0:
+        raise HTTPException(status_code=400, detail="Invalid pool price.")
+
+    try:
+        min_matched, max_matched, current_matched = match_prices(
+            min_price=float(req.min_price),
+            max_price=float(req.max_price),
+            current_price=float(current_price),
+            fee_tier=pool_config.fee_tier,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return MatchTicksResponse(
+        min_price_matched=min_matched,
+        max_price_matched=max_matched,
+        current_price_matched=current_matched,
+    )
+
+
 @app.get("/api/pool-price", response_model=PoolPriceResponse)
 def pool_price(
     pool_id: int,
-    days: int,
+    days: int | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
     _token: str = Depends(require_jwt),
     pool_repo: PoolRepository = Depends(get_pool_repository),
     price_repo: PoolPriceRepository = Depends(get_pool_price_repository),
-    subgraph_client: UniswapV3SubgraphClient = Depends(get_subgraph_client),
+    price_repo_current: CurrentPriceRepository = Depends(get_current_price_repository),
 ):
-    if days <= 0:
-        raise HTTPException(status_code=400, detail="days must be a positive integer.")
+    if (start is None) != (end is None):
+        raise HTTPException(status_code=400, detail="start and end must be provided together.")
+    if start is not None and end is not None:
+        if days is not None:
+            raise HTTPException(status_code=400, detail="Use either days or start/end.")
+        if start >= end:
+            raise HTTPException(status_code=400, detail="start must be earlier than end.")
+    else:
+        if days is None:
+            raise HTTPException(status_code=400, detail="days is required when start/end is not provided.")
+        if days <= 0:
+            raise HTTPException(status_code=400, detail="days must be a positive integer.")
     pool = pool_repo.get_by_id(pool_id)
     if not pool:
         raise HTTPException(status_code=404, detail="Pool not found.")
 
-    stats_row = price_repo.get_stats(pool_id=pool.id, days=days)
-    series_rows = price_repo.get_series(pool_id=pool.id, days=days)
+    if start is not None and end is not None:
+        stats_row = price_repo.get_stats_range(pool_id=pool.id, start=start, end=end)
+        series_rows = price_repo.get_series_range(pool_id=pool.id, start=start, end=end)
+        days_value = int(ceil((end - start).total_seconds() / 86400))
+    else:
+        stats_row = price_repo.get_stats(pool_id=pool.id, days=days)
+        series_rows = price_repo.get_series(pool_id=pool.id, days=days)
+        days_value = days
+    current_row = price_repo_current.get_latest_price(pool_id=pool.id)
+    if not current_row:
+        raise HTTPException(status_code=404, detail="Pool price not found.")
     try:
-        current_price = subgraph_client.get_current_price(
-            network=pool.network,
-            pool_address=pool.pool_address,
+        current_price = resolve_current_price(
+            token1_price=current_row.token1_price,
+            token0_price=current_row.token0_price,
+            sqrt_price_x96=current_row.sqrt_price_x96,
         )
-    except SubgraphError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
 
     return PoolPriceResponse(
         pool_id=pool.id,
-        days=days,
+        days=days_value,
         stats=PoolPriceStats(
             min=_dec_to_str_or_none(stats_row.min_price),
             max=_dec_to_str_or_none(stats_row.max_price),
@@ -326,7 +419,7 @@ def estimated_fees(
     _token: str = Depends(require_jwt),
     pool_repo: PoolRepository = Depends(get_pool_repository),
     fees_repo: EstimatedFeesRepository = Depends(get_estimated_fees_repository),
-    subgraph_client: UniswapV3SubgraphClient = Depends(get_subgraph_client),
+    price_repo_current: CurrentPriceRepository = Depends(get_current_price_repository),
 ):
     if req.days <= 0:
         raise HTTPException(status_code=400, detail="days must be a positive integer.")
@@ -347,13 +440,19 @@ def estimated_fees(
     hours_in_range = aggregates.hours_in_range
     in_range_days = Decimal(hours_in_range) / Decimal("24") if hours_in_range > 0 else Decimal("0")
 
+    current_row = price_repo_current.get_latest_price(pool_id=pool.id)
+    if not current_row:
+        raise HTTPException(status_code=404, detail="Pool price not found.")
     try:
-        current_price = subgraph_client.get_current_price(
-            network=pool.network,
-            pool_address=pool.pool_address,
+        current_price = resolve_current_price(
+            token1_price=current_row.token1_price,
+            token0_price=current_row.token0_price,
+            sqrt_price_x96=current_row.sqrt_price_x96,
         )
-    except SubgraphError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
 
     user_liquidity = _position_liquidity(
         amount_token0=req.amount_token0,

@@ -37,6 +37,7 @@
 - `GET /v1/exchanges/{exchange_id}/networks/{network_id}/tokens`.
 - `GET /v1/exchanges/{exchange_id}/networks/{network_id}/pools`.
 - `GET /v1/pools/by-address/{pool_address}`.
+- `POST /v1/match-ticks`.
 
 ## POST /v1/allocate
 Entrada:
@@ -80,11 +81,17 @@ Entrada:
   "pool_id": 572,
   "snapshot_date": "2025-12-24",
   "current_tick": 0,
+  "center_tick": -198000,
   "tick_range": 6000,
   "range_min": 2833.5,
   "range_max": 3242.4
 }
 ```
+
+Notas:
+- Use `center_tick` para pan (mover o centro do gráfico).
+- Ajuste `tick_range` para zoom (janela maior/menor).
+- Quando `center_tick` nao e informado, o `current_tick` e calculado pelo banco usando `pool_hours`.
 
 Resposta:
 ```json
@@ -100,10 +107,16 @@ Resposta:
 ## GET /api/pool-price
 Query params:
 - `pool_id` (int)
-- `days` (int, > 0)
+- `days` (int, > 0) ou `start` + `end` (ISO timestamp)
 
 Exemplo:
 `/api/pool-price?pool_id=572&days=30`
+
+Exemplo (pan):
+`/api/pool-price?pool_id=572&start=2025-01-01T00:00:00Z&end=2025-01-31T00:00:00Z`
+
+Notas:
+- O `price` atual usa o ultimo snapshot de `pool_hours` (token0_price, com fallback para sqrt_price_x96).
 
 Resposta:
 ```json
@@ -135,6 +148,9 @@ Entrada:
   "amount_token1": "0"
 }
 ```
+
+Notas:
+- O calculo de preco atual usa o ultimo snapshot de `pool_hours` (token0_price, com fallback para sqrt_price_x96).
 
 Resposta:
 ```json
@@ -210,6 +226,25 @@ Resposta:
   "token1_address": "0x...",
   "token1_symbol": "USDC",
   "token1_decimals": 6
+}
+```
+
+## POST /v1/match-ticks
+Entrada:
+```json
+{
+  "pool_id": 572,
+  "min_price": 2833.5,
+  "max_price": 3242.4
+}
+```
+
+Resposta:
+```json
+{
+  "min_price_matched": 2832.97,
+  "max_price_matched": 3244.11,
+  "current_price_matched": 2952.38
 }
 ```
 
