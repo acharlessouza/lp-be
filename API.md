@@ -27,10 +27,16 @@
 }
 ```
 
-## Endpoints (a definir)
+## Endpoints
 - `POST /v1/allocate` (principal, autenticado).
-- Simulacoes de APR (rotas, payloads e respostas em definicao).
-- Consultas auxiliares de pools, tokens e precos (se necessario).
+- `POST /api/liquidity-distribution` (alias: `/v1/liquidity-distribution`).
+- `GET /api/pool-price`.
+- `POST /api/estimated-fees`.
+- `GET /v1/exchanges`.
+- `GET /v1/exchanges/{exchange_id}/networks`.
+- `GET /v1/exchanges/{exchange_id}/networks/{network_id}/tokens`.
+- `GET /v1/exchanges/{exchange_id}/networks/{network_id}/pools`.
+- `GET /v1/pools/by-address/{pool_address}`.
 
 ## POST /v1/allocate
 Entrada:
@@ -88,6 +94,122 @@ Resposta:
   "data": [
     { "tick": -198120, "liquidity": "2226...", "price": 2927.79 }
   ]
+}
+```
+
+## GET /api/pool-price
+Query params:
+- `pool_id` (int)
+- `days` (int, > 0)
+
+Exemplo:
+`/api/pool-price?pool_id=572&days=30`
+
+Resposta:
+```json
+{
+  "pool_id": 572,
+  "days": 30,
+  "stats": {
+    "min": "2850.12",
+    "max": "3150.55",
+    "avg": "2999.98",
+    "price": "3021.11"
+  },
+  "series": [
+    { "timestamp": "2025-01-01T00:00:00", "price": "2950.11" }
+  ]
+}
+```
+
+## POST /api/estimated-fees
+Entrada:
+```json
+{
+  "pool_id": 572,
+  "days": 30,
+  "min_price": "2800",
+  "max_price": "3300",
+  "deposit_usd": "10000",
+  "amount_token0": "1.2",
+  "amount_token1": "0"
+}
+```
+
+Resposta:
+```json
+{
+  "estimated_fees_24h": "12.34",
+  "monthly": { "value": "370.2", "percent": "3.7" },
+  "yearly": { "value": "4500.0", "apr": "0.45" }
+}
+```
+
+## GET /v1/exchanges
+Resposta:
+```json
+[
+  { "id": 1, "name": "uniswap" },
+  { "id": 2, "name": "sushiswap" }
+]
+```
+
+## GET /v1/exchanges/{exchange_id}/networks
+Resposta:
+```json
+[
+  { "id": 1, "name": "ethereum" },
+  { "id": 2, "name": "arbitrum" }
+]
+```
+
+## GET /v1/exchanges/{exchange_id}/networks/{network_id}/tokens
+Query params (opcional):
+- `token` (address) filtra por pools que contenham o token informado.
+
+Resposta:
+```json
+[
+  { "address": "0x...", "symbol": "WETH", "decimals": 18 },
+  { "address": "0x...", "symbol": "USDC", "decimals": 6 }
+]
+```
+
+## GET /v1/exchanges/{exchange_id}/networks/{network_id}/pools
+Query params:
+- `token0` (address)
+- `token1` (address)
+
+Exemplo:
+`/v1/exchanges/1/networks/2/pools?token0=0x...&token1=0x...`
+
+Resposta:
+```json
+[
+  { "pool_address": "0x...", "fee_tier": 500 },
+  { "pool_address": "0x...", "fee_tier": 3000 }
+]
+```
+
+## GET /v1/pools/by-address/{pool_address}
+Query params:
+- `network` (string).
+- `exchange_id` (int).
+
+Exemplo:
+`/v1/pools/by-address/0x...?network=arbitrum&exchange_id=1`
+
+Resposta:
+```json
+{
+  "id": 572,
+  "fee_tier": 500,
+  "token0_address": "0x...",
+  "token0_symbol": "WETH",
+  "token0_decimals": 18,
+  "token1_address": "0x...",
+  "token1_symbol": "USDC",
+  "token1_decimals": 6
 }
 ```
 

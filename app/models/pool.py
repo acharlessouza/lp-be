@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Column, Integer, String
+from sqlalchemy import Column, Integer, String, ForeignKey
 
 from ..core.db import Base
 
@@ -9,7 +9,7 @@ class Pool(Base):
     __tablename__ = "pools"
 
     id = Column(Integer, primary_key=True)
-    network = Column(String(32), nullable=False)
+    network_id = Column(Integer, ForeignKey("networks.id"), nullable=False)
     pool_address = Column(String(64), nullable=False)
     fee_tier = Column(Integer, nullable=False)
 
