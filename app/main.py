@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, getcontext
 from math import ceil
 
@@ -283,7 +283,15 @@ def liquidity_distribution(
         max_tick=max_tick,
     )
     if not rows:
-        raise HTTPException(status_code=404, detail="Tick snapshot not found.")
+        fallback_date = req.snapshot_date - timedelta(days=1)
+        rows = dist_repo.get_rows(
+            pool_id=pool.id,
+            snapshot_date=fallback_date,
+            min_tick=min_tick,
+            max_tick=max_tick,
+        )
+        if not rows:
+            raise HTTPException(status_code=404, detail="Tick snapshot not found.")
 
     data_out = [
         LiquidityDistributionPoint(

@@ -92,6 +92,7 @@ Notas:
 - Use `center_tick` para pan (mover o centro do gráfico).
 - Ajuste `tick_range` para zoom (janela maior/menor).
 - Quando `center_tick` nao e informado, o `current_tick` e calculado pelo banco usando `pool_hours`.
+- Se nao houver snapshot para a data informada, o sistema tenta automaticamente `snapshot_date - 1` dia.
 
 Resposta:
 ```json
