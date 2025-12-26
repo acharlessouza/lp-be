@@ -28,6 +28,7 @@ from .repositories.pools import PoolRepository
 from .repositories.pool_price import PoolPriceRepository
 from .repositories.liquidity_distribution import LiquidityDistributionRepository
 from .repositories.exchanges import ExchangeRepository
+from .repositories.discover_pools import DiscoverPoolsRepository
 from .repositories.current_price import CurrentPriceRepository
 from .repositories.current_tick import CurrentTickRepository
 from .repositories.networks import NetworkRepository
@@ -42,6 +43,7 @@ from .schemas.exchange import ExchangeResponse
 from .schemas.network import NetworkResponse
 from .schemas.token import TokenResponse
 from .schemas.match_ticks import MatchTicksRequest, MatchTicksResponse
+from .schemas.discover_pools import DiscoverPoolsResponse, DiscoverPoolItem
 from .schemas.pool_price import PoolPricePoint, PoolPriceResponse, PoolPriceStats
 from .schemas.pool_summary import PoolSummaryResponse
 from .schemas.pool_detail import PoolDetailResponse
@@ -90,6 +92,14 @@ def get_estimated_fees_repository() -> EstimatedFeesRepository:
         raise HTTPException(status_code=500, detail="POSTGRES_DSN is required.")
     engine = get_engine(settings.postgres_dsn)
     return EstimatedFeesRepository(engine)
+
+
+def get_discover_pools_repository() -> DiscoverPoolsRepository:
+    settings = get_settings()
+    if not settings.postgres_dsn:
+        raise HTTPException(status_code=500, detail="POSTGRES_DSN is required.")
+    engine = get_engine(settings.postgres_dsn)
+    return DiscoverPoolsRepository(engine)
 
 
 def get_pool_price_repository() -> PoolPriceRepository:
@@ -250,7 +260,6 @@ def allocate(
     )
 
 
-@app.post("/api/liquidity-distribution", response_model=LiquidityDistributionResponse)
 @app.post("/v1/liquidity-distribution", response_model=LiquidityDistributionResponse)
 def liquidity_distribution(
     req: LiquidityDistributionRequest,
@@ -356,7 +365,7 @@ def match_ticks(
     )
 
 
-@app.get("/api/pool-price", response_model=PoolPriceResponse)
+@app.get("/v1/pool-price", response_model=PoolPriceResponse)
 def pool_price(
     pool_id: int,
     days: int | None = None,
@@ -421,7 +430,7 @@ def pool_price(
     )
 
 
-@app.post("/api/estimated-fees", response_model=EstimatedFeesResponse)
+@app.post("/v1/estimated-fees", response_model=EstimatedFeesResponse)
 def estimated_fees(
     req: EstimatedFeesRequest,
     _token: str = Depends(require_jwt),
@@ -497,6 +506,122 @@ def estimated_fees(
         estimated_fees_24h=estimated_24h,
         monthly=EstimatedFeesMonthly(value=monthly_value, percent=monthly_percent),
         yearly=EstimatedFeesYearly(value=yearly_value, apr=yearly_apr),
+    )
+
+
+@app.get("/v1/discover/pools", response_model=DiscoverPoolsResponse)
+def discover_pools(
+    network_id: int | None = None,
+    exchange_id: int | None = None,
+    token_symbol: str | None = None,
+    timeframe_days: int = 14,
+    page: int = 1,
+    page_size: int = 10,
+    order_by: str = "average_apr",
+    order_dir: str = "desc",
+    _token: str = Depends(require_jwt),
+    discover_repo: DiscoverPoolsRepository = Depends(get_discover_pools_repository),
+):
+    if timeframe_days < 1 or timeframe_days > 365:
+        raise HTTPException(status_code=400, detail="timeframe_days must be between 1 and 365.")
+    if page < 1:
+        raise HTTPException(status_code=400, detail="page must be >= 1.")
+    if page_size < 1 or page_size > 100:
+        raise HTTPException(status_code=400, detail="page_size must be between 1 and 100.")
+    if order_dir not in {"asc", "desc"}:
+        raise HTTPException(status_code=400, detail="order_dir must be asc or desc.")
+
+    order_fields = {
+        "pool_id": int,
+        "pool_address": str,
+        "pool_name": str,
+        "network": str,
+        "exchange": str,
+        "fee_tier": int,
+        "average_apr": Decimal,
+        "price_volatility": Decimal,
+        "tvl_usd": Decimal,
+        "correlation": Decimal,
+        "avg_daily_fees_usd": Decimal,
+        "daily_fees_tvl_pct": Decimal,
+        "avg_daily_volume_usd": Decimal,
+        "daily_volume_tvl_pct": Decimal,
+    }
+    if order_by not in order_fields:
+        raise HTTPException(status_code=400, detail="order_by is not supported.")
+
+    start_dt = datetime.utcnow() - timedelta(days=timeframe_days)
+    rows = discover_repo.list_pools(
+        start_dt=start_dt,
+        network_id=network_id,
+        exchange_id=exchange_id,
+        token_symbol=token_symbol.upper() if token_symbol else None,
+    )
+
+    data: list[DiscoverPoolItem] = []
+    for row in rows:
+        tvl_usd = _dec_or_zero(row.avg_tvl_usd)
+        avg_hourly_fees = _dec_or_zero(row.avg_hourly_fees_usd)
+        avg_hourly_volume = _dec_or_zero(row.avg_hourly_volume_usd)
+        total_fees = _dec_or_zero(row.total_fees_usd)
+
+        avg_daily_fees_usd = avg_hourly_fees * Decimal("24")
+        avg_daily_volume_usd = avg_hourly_volume * Decimal("24")
+
+        if tvl_usd > 0:
+            daily_fees_tvl_pct = avg_daily_fees_usd / tvl_usd
+            daily_volume_tvl_pct = avg_daily_volume_usd / tvl_usd
+            average_apr = (
+                (total_fees / tvl_usd)
+                * (Decimal("365") / Decimal(timeframe_days))
+                * Decimal("100")
+            )
+        else:
+            daily_fees_tvl_pct = Decimal("0")
+            daily_volume_tvl_pct = Decimal("0")
+            average_apr = Decimal("0")
+
+        data.append(
+            DiscoverPoolItem(
+                pool_id=row.pool_id,
+                pool_address=row.pool_address,
+                pool_name=f"{row.token0_symbol} / {row.token1_symbol}",
+                network=row.network_name,
+                exchange=row.exchange_name,
+                fee_tier=row.fee_tier,
+                average_apr=average_apr,
+                price_volatility=None,
+                tvl_usd=tvl_usd,
+                correlation=None,
+                avg_daily_fees_usd=avg_daily_fees_usd,
+                daily_fees_tvl_pct=daily_fees_tvl_pct,
+                avg_daily_volume_usd=avg_daily_volume_usd,
+                daily_volume_tvl_pct=daily_volume_tvl_pct,
+            )
+        )
+
+    def _order_value(item: DiscoverPoolItem):
+        value = getattr(item, order_by)
+        value_type = order_fields[order_by]
+        if value is None:
+            if value_type is str:
+                return ""
+            if value_type is int:
+                return 0
+            return Decimal("0")
+        return value
+
+    reverse = order_dir == "desc"
+    data_sorted = sorted(data, key=_order_value, reverse=reverse)
+    total = len(data_sorted)
+    offset = (page - 1) * page_size
+    data_page = data_sorted[offset : offset + page_size]
+
+    return DiscoverPoolsResponse(
+        page=page,
+        page_size=page_size,
+        total=total,
+        data=data_page,
     )
 
 

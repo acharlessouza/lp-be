@@ -29,15 +29,16 @@
 
 ## Endpoints
 - `POST /v1/allocate` (principal, autenticado).
-- `POST /api/liquidity-distribution` (alias: `/v1/liquidity-distribution`).
-- `GET /api/pool-price`.
-- `POST /api/estimated-fees`.
+- `POST /v1/liquidity-distribution`.
+- `GET /v1/pool-price`.
+- `POST /v1/estimated-fees`.
 - `GET /v1/exchanges`.
 - `GET /v1/exchanges/{exchange_id}/networks`.
 - `GET /v1/exchanges/{exchange_id}/networks/{network_id}/tokens`.
 - `GET /v1/exchanges/{exchange_id}/networks/{network_id}/pools`.
 - `GET /v1/pools/by-address/{pool_address}`.
 - `POST /v1/match-ticks`.
+- `GET /v1/discover/pools`.
 
 ## POST /v1/allocate
 Entrada:
@@ -73,8 +74,7 @@ Resposta:
 }
 ```
 
-## POST /api/liquidity-distribution
-Alias: `/v1/liquidity-distribution`.
+## POST /v1/liquidity-distribution
 Entrada:
 ```json
 {
@@ -105,16 +105,16 @@ Resposta:
 }
 ```
 
-## GET /api/pool-price
+## GET /v1/pool-price
 Query params:
 - `pool_id` (int)
 - `days` (int, > 0) ou `start` + `end` (ISO timestamp)
 
 Exemplo:
-`/api/pool-price?pool_id=572&days=30`
+`/v1/pool-price?pool_id=572&days=30`
 
 Exemplo (pan):
-`/api/pool-price?pool_id=572&start=2025-01-01T00:00:00Z&end=2025-01-31T00:00:00Z`
+`/v1/pool-price?pool_id=572&start=2025-01-01T00:00:00Z&end=2025-01-31T00:00:00Z`
 
 Notas:
 - O `price` atual usa o ultimo snapshot de `pool_hours` (token0_price, com fallback para sqrt_price_x96).
@@ -136,7 +136,7 @@ Resposta:
 }
 ```
 
-## POST /api/estimated-fees
+## POST /v1/estimated-fees
 Entrada:
 ```json
 {
@@ -246,6 +246,47 @@ Resposta:
   "min_price_matched": 2832.97,
   "max_price_matched": 3244.11,
   "current_price_matched": 2952.38
+}
+```
+
+## GET /v1/discover/pools
+Query params:
+- `network_id` (int, opcional)
+- `exchange_id` (int, opcional)
+- `token_symbol` (string, opcional)
+- `timeframe_days` (int, 1-365, default 14)
+- `page` (int, default 1)
+- `page_size` (int, 1-100, default 10)
+- `order_by` (pool_id | pool_address | pool_name | network | exchange | fee_tier | average_apr | price_volatility | tvl_usd | correlation | avg_daily_fees_usd | daily_fees_tvl_pct | avg_daily_volume_usd | daily_volume_tvl_pct)
+- `order_dir` (asc | desc, default desc)
+
+Exemplo:
+`/v1/discover/pools?network_id=2&exchange_id=1&token_symbol=USDC&timeframe_days=30&page=1&page_size=10&order_by=average_apr&order_dir=desc`
+
+Resposta:
+```json
+{
+  "page": 1,
+  "page_size": 10,
+  "total": 2,
+  "data": [
+    {
+      "pool_id": 572,
+      "pool_address": "0x...",
+      "pool_name": "WETH / USDC",
+      "network": "arbitrum",
+      "exchange": "uniswap",
+      "fee_tier": 500,
+      "average_apr": "12.34",
+      "price_volatility": null,
+      "tvl_usd": "1234567.89",
+      "correlation": null,
+      "avg_daily_fees_usd": "123.45",
+      "daily_fees_tvl_pct": "0.0001",
+      "avg_daily_volume_usd": "9876.54",
+      "daily_volume_tvl_pct": "0.0080"
+    }
+  ]
 }
 ```
 
