@@ -55,11 +55,15 @@ Entrada:
 Notas:
 - `range1` e `range2` devem ser informados como **preco do token0 em unidades de token1**
   (ex.: WETH/USDT = 2932.21).
+- Implementacao interna segue arquitetura Hexagonal:
+  - adapter HTTP em `app/api/routers/allocate.py`
+  - use case em `app/application/use_cases/allocate.py`
+  - regra de negocio em `app/domain/services/allocation.py`
+  - adapters de saida em `app/infrastructure/**`
 
 Resposta:
 ```json
 {
-  "pool_id": 1,
   "pool_address": "0x...",
   "rede": "arbitrum",
   "taxa": 500,
@@ -91,8 +95,19 @@ Entrada:
 Notas:
 - Use `center_tick` para pan (mover o centro do gráfico).
 - Ajuste `tick_range` para zoom (janela maior/menor).
-- Quando `center_tick` nao e informado, o `current_tick` e calculado pelo banco usando `pool_hours`.
-- Se nao houver snapshot para a data informada, o sistema tenta automaticamente `snapshot_date - 1` dia.
+- O endpoint usa o ultimo `period_start` disponivel em `estrutura.ticks`.
+- Quando `center_tick` nao e informado, o `current_tick` vem de `estrutura.pools.current_tick`.
+- `snapshot_date` e ignorado neste fluxo.
+- A liquidez plotada e a soma acumulada de `liquidity_net` ancorada em `estrutura.pools.onchain_liquidity`.
+- Implementacao interna segue arquitetura Hexagonal:
+  - adapter HTTP em `app/api/routers/liquidity_distribution.py`
+  - use case em `app/application/use_cases/get_liquidity_distribution.py`
+  - regra de dominio em `app/domain/services/liquidity_distribution.py`
+  - SQL em `app/infrastructure/db/repositories/liquidity_distribution_repository.py`
+
+Erros possiveis:
+- `400` quando parametros forem invalidos.
+- `404` quando pool nao existir ou nao houver snapshot/liquidez disponivel.
 
 Resposta:
 ```json
@@ -118,6 +133,15 @@ Exemplo (pan):
 
 Notas:
 - O `price` atual usa o ultimo snapshot de `pool_hours` (token0_price, com fallback para sqrt_price_x96).
+- Implementacao interna segue arquitetura Hexagonal:
+  - adapter HTTP em `app/api/routers/pool_price.py`
+  - use case em `app/application/use_cases/get_pool_price.py`
+  - regra de dominio em `app/domain/services/pool_price.py`
+  - SQL em `app/infrastructure/db/repositories/pool_price_repository.py`
+
+Erros possiveis:
+- `400` quando parametros forem invalidos (`days`, `start/end`).
+- `404` quando pool nao existir ou nao houver preco atual para a pool.
 
 Resposta:
 ```json
@@ -152,6 +176,15 @@ Entrada:
 
 Notas:
 - O calculo de preco atual usa o ultimo snapshot de `pool_hours` (token0_price, com fallback para sqrt_price_x96).
+- Implementacao interna segue arquitetura Hexagonal:
+  - adapter HTTP em `app/api/routers/estimated_fees.py`
+  - use case em `app/application/use_cases/estimate_fees.py`
+  - regra de dominio em `app/domain/services/estimated_fees.py`
+  - SQL em `app/infrastructure/db/repositories/estimated_fees_repository.py`
+
+Erros possiveis:
+- `400` quando parametros forem invalidos.
+- `404` quando pool nao existir ou nao houver preco atual para a pool.
 
 Resposta:
 ```json
@@ -163,6 +196,12 @@ Resposta:
 ```
 
 ## GET /v1/exchanges
+Notas:
+- Implementacao interna segue arquitetura Hexagonal:
+  - router em `app/api/routers/catalog.py`
+  - use cases em `app/application/use_cases/*`
+  - SQL em `app/infrastructure/db/repositories/catalog_query_repository.py`
+
 Resposta:
 ```json
 [
@@ -240,6 +279,17 @@ Entrada:
 }
 ```
 
+Notas:
+- Implementacao interna segue arquitetura Hexagonal:
+  - adapter HTTP em `app/api/routers/match_ticks.py`
+  - use case em `app/application/use_cases/match_ticks.py`
+  - regra de dominio em `app/domain/services/match_ticks.py`
+  - SQL em `app/infrastructure/db/repositories/match_ticks_repository.py`
+
+Erros possiveis:
+- `400` quando parametros forem invalidos.
+- `404` quando pool nao existir ou nao houver preco atual.
+
 Resposta:
 ```json
 {
@@ -262,6 +312,16 @@ Query params:
 
 Exemplo:
 `/v1/discover/pools?network_id=2&exchange_id=1&token_symbol=USDC&timeframe_days=30&page=1&page_size=10&order_by=average_apr&order_dir=desc`
+
+Notas:
+- Implementacao interna segue arquitetura Hexagonal:
+  - adapter HTTP em `app/api/routers/discover_pools.py`
+  - use case em `app/application/use_cases/discover_pools.py`
+  - regra de dominio em `app/domain/services/discover_pools.py`
+  - SQL em `app/infrastructure/db/repositories/discover_pools_repository.py`
+
+Erros possiveis:
+- `400` quando filtros/ordenacao/paginacao forem invalidos.
 
 Resposta:
 ```json
