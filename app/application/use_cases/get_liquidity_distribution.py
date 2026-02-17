@@ -6,10 +6,12 @@ from app.application.dto.liquidity_distribution import (
     LiquidityDistributionPointOutput,
 )
 from app.application.ports.liquidity_distribution_port import LiquidityDistributionPort
+from app.application.use_cases.liquidity_distribution_pool_resolver import (
+    resolve_liquidity_distribution_pool,
+)
 from app.domain.exceptions import (
     LiquidityDistributionInputError,
     LiquidityDistributionNotFoundError,
-    PoolNotFoundError,
 )
 from app.domain.services.liquidity_distribution import build_liquidity_distribution
 
@@ -22,9 +24,12 @@ class GetLiquidityDistributionUseCase:
         if command.tick_range < 1:
             raise LiquidityDistributionInputError("tick_range must be >= 1.")
 
-        pool = self._distribution_port.get_pool_by_id(pool_id=command.pool_id)
-        if pool is None:
-            raise PoolNotFoundError("Pool not found.")
+        pool = resolve_liquidity_distribution_pool(
+            distribution_port=self._distribution_port,
+            pool_id=command.pool_id,
+            chain_id=command.chain_id,
+            dex_id=command.dex_id,
+        )
 
         current_tick = command.center_tick if command.center_tick is not None else pool.current_tick
         if current_tick is None:

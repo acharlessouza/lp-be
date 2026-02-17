@@ -22,7 +22,8 @@ def allocate(
         result = use_case.execute(
             AllocateInput(
                 pool_address=req.pool_address,
-                network=req.rede,
+                chain_id=req.chain_id,
+                dex_id=req.dex_id,
                 deposit_usd=req.amount,
                 range_min=req.range1,
                 range_max=req.range2,

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from threading import Lock
+import time
 
 import httpx
 
@@ -49,9 +51,35 @@ class PriceOverrides:
 
 
 class CoingeckoPriceProvider:
-    def __init__(self, api_base: str, timeout_seconds: float):
+    def __init__(self, api_base: str, timeout_seconds: float, cache_ttl_seconds: float = 300):
         self.api_base = api_base.rstrip("/")
         self.timeout = timeout_seconds
+        self.cache_ttl_seconds = cache_ttl_seconds
+        self._cache: dict[tuple[str, str], tuple[float, Decimal]] = {}
+        self._lock = Lock()
+
+    def _cache_get(self, *, platform: str, token_address: str) -> Decimal | None:
+        if self.cache_ttl_seconds <= 0:
+            return None
+        key = (platform, token_address.lower())
+        now = time.monotonic()
+        with self._lock:
+            cached = self._cache.get(key)
+            if cached is None:
+                return None
+            expires_at, value = cached
+            if expires_at <= now:
+                self._cache.pop(key, None)
+                return None
+            return value
+
+    def _cache_set(self, *, platform: str, token_address: str, value: Decimal) -> None:
+        if self.cache_ttl_seconds <= 0:
+            return
+        key = (platform, token_address.lower())
+        expires_at = time.monotonic() + self.cache_ttl_seconds
+        with self._lock:
+            self._cache[key] = (expires_at, value)
 
     def get_price_usd(self, network: str, token_address: str) -> Decimal:
         platform = COINGECKO_PLATFORMS.get(_normalize_network(network))
@@ -59,6 +87,10 @@ class CoingeckoPriceProvider:
             raise PriceLookupError(f"Unsupported network for pricing: {network}")
         if not token_address.lower().startswith("0x"):
             raise PriceLookupError("Coingecko pricing requires a token address.")
+
+        cached = self._cache_get(platform=platform, token_address=token_address)
+        if cached is not None:
+            return cached
 
         url = f"{self.api_base}/simple/token_price/{platform}"
         params = {
@@ -72,7 +104,9 @@ class CoingeckoPriceProvider:
         token_key = token_address.lower()
         if token_key not in payload or "usd" not in payload[token_key]:
             raise PriceLookupError("Price not found for token.")
-        return Decimal(str(payload[token_key]["usd"]))
+        value = Decimal(str(payload[token_key]["usd"]))
+        self._cache_set(platform=platform, token_address=token_address, value=value)
+        return value
 
 
 class PriceService:

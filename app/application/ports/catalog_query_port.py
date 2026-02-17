@@ -35,7 +35,7 @@ class CatalogQueryPort(Protocol):
         self,
         *,
         pool_address: str,
-        network: str,
+        chain_id: int,
         exchange_id: int,
     ) -> PoolDetail | None:
         ...

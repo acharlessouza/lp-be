@@ -16,7 +16,7 @@ class PoolPricePointResponse(BaseModel):
 
 
 class PoolPriceResponse(BaseModel):
-    pool_id: int
+    pool_address: str
     days: int
     stats: PoolPriceStatsResponse
     series: list[PoolPricePointResponse]

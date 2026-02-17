@@ -13,7 +13,7 @@ class GetPoolByAddressUseCase:
     def execute(self, command: GetPoolByAddressInput) -> PoolDetail:
         pool = self._catalog_port.get_pool_by_address(
             pool_address=command.pool_address,
-            network=command.network,
+            chain_id=command.chain_id,
             exchange_id=command.exchange_id,
         )
         if pool is None:

@@ -7,7 +7,8 @@ from pydantic import BaseModel, Field
 
 class AllocationRequest(BaseModel):
     pool_address: str = Field(..., description="Pool address from the pools table.")
-    rede: str = Field(..., description="Network name (e.g. arbitrum).")
+    chain_id: int = Field(..., gt=0, description="Chain ID da pool.")
+    dex_id: int = Field(..., gt=0, description="Dex ID da pool.")
     amount: Decimal = Field(..., description="Deposit amount in USD.")
     range1: Decimal = Field(..., description="Min range value (token1/token0).")
     range2: Decimal = Field(..., description="Max range value (token1/token0).")

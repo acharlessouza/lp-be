@@ -30,8 +30,10 @@
 ## Endpoints
 - `POST /v1/allocate` (principal, autenticado).
 - `POST /v1/liquidity-distribution`.
+- `POST /v1/liquidity-distribution/default-range`.
 - `GET /v1/pool-price`.
 - `POST /v1/estimated-fees`.
+- `POST /v1/simulate/apr`.
 - `GET /v1/exchanges`.
 - `GET /v1/exchanges/{exchange_id}/networks`.
 - `GET /v1/exchanges/{exchange_id}/networks/{network_id}/tokens`.
@@ -45,7 +47,8 @@ Entrada:
 ```json
 {
   "pool_address": "0xe1f083255e2133ef143f3c264611cfabb6133f9a",
-  "rede": "arbitrum",
+  "chain_id": 2,
+  "dex_id": 1,
   "amount": "1000",
   "range1": "2500",
   "range2": "3500"
@@ -82,7 +85,9 @@ Resposta:
 Entrada:
 ```json
 {
-  "pool_id": 572,
+  "pool_id": "0x4e68ccd3e89f51c3074ca5072bbac773960dfa36",
+  "chain_id": 2,
+  "dex_id": 1,
   "snapshot_date": "2025-12-24",
   "current_tick": 0,
   "center_tick": -198000,
@@ -95,10 +100,12 @@ Entrada:
 Notas:
 - Use `center_tick` para pan (mover o centro do gráfico).
 - Ajuste `tick_range` para zoom (janela maior/menor).
-- O endpoint usa o ultimo `period_start` disponivel em `estrutura.ticks`.
-- Quando `center_tick` nao e informado, o `current_tick` vem de `estrutura.pools.current_tick`.
+- `pool_id` aceita ID numerico legado ou `pool_address` (`0x...`).
+- Se usar `pool_address`, `chain_id` e `dex_id` ajudam a desambiguar quando houver mais de uma pool com o mesmo endereco.
+- O endpoint usa o ultimo `snapshot_at` disponivel em `public.pool_state_snapshots`.
+- Quando `center_tick` nao e informado, o `current_tick` vem de `public.pool_state_snapshots.tick` (fallback: `public.pools.tick`).
 - `snapshot_date` e ignorado neste fluxo.
-- A liquidez plotada e a soma acumulada de `liquidity_net` ancorada em `estrutura.pools.onchain_liquidity`.
+- A liquidez plotada e a soma acumulada de `liquidity_net` (`public.pool_ticks_initialized`) ancorada na liquidez onchain (`public.pool_state_snapshots.liquidity`, fallback `public.pools.liquidity`).
 - Implementacao interna segue arquitetura Hexagonal:
   - adapter HTTP em `app/api/routers/liquidity_distribution.py`
   - use case em `app/application/use_cases/get_liquidity_distribution.py`
@@ -120,19 +127,69 @@ Resposta:
 }
 ```
 
+## POST /v1/liquidity-distribution/default-range
+Entrada:
+```json
+{
+  "pool_id": "0x4e68ccd3e89f51c3074ca5072bbac773960dfa36",
+  "chain_id": 1,
+  "dex_id": 1,
+  "snapshot_date": "2026-02-16",
+  "preset": "wide",
+  "initial_price": 3021.11,
+  "center_tick": null,
+  "swapped_pair": false
+}
+```
+
+Notas:
+- `pool_id` aceita ID numerico legado ou `pool_address` (`0x...`).
+- Se usar `pool_address`, `chain_id` e `dex_id` sao usados para desambiguar.
+- `snapshot_date` e ignorado neste fluxo (o endpoint usa o ultimo snapshot disponivel).
+- `preset` aceita:
+  - `stable`: faixa estreita em torno do tick atual (`+- 3 * tick_spacing`).
+  - `wide`: faixa percentual (`-50% / +100%`) com alinhamento para ticks utilizaveis.
+  - valor padrao: `stable`.
+- `initial_price` e opcional. Se nao for enviado, a API tenta derivar de `pools.price_token0_per_token1` e, como fallback, do tick atual.
+- `center_tick` e opcional. Se enviado, substitui o tick atual da pool para o calculo.
+- `tick_spacing` e obtido automaticamente da pool; fallback por `fee_tier` (100->1, 500->10, 3000->60, 10000->200).
+- Quando `swapped_pair=true`, os precos retornados sao invertidos (`1/price`) e ordenados.
+- Implementacao interna segue arquitetura Hexagonal:
+  - adapter HTTP em `app/api/routers/liquidity_distribution.py`
+  - use case em `app/application/use_cases/get_liquidity_distribution_default_range.py`
+  - regra de dominio em `app/domain/services/liquidity_distribution_default_range.py`
+  - SQL em `app/infrastructure/db/repositories/liquidity_distribution_repository.py`
+
+Erros possiveis:
+- `400` quando parametros forem invalidos.
+- `404` quando pool nao existir.
+
+Resposta:
+```json
+{
+  "min_price": 2833.5,
+  "max_price": 3242.4,
+  "min_tick": -198120,
+  "max_tick": -196880,
+  "tick_spacing": 60
+}
+```
+
 ## GET /v1/pool-price
 Query params:
-- `pool_id` (int)
+- `pool_address` (string)
+- `chain_id` (int)
+- `dex_id` (int)
 - `days` (int, > 0) ou `start` + `end` (ISO timestamp)
 
 Exemplo:
-`/v1/pool-price?pool_id=572&days=30`
+`/v1/pool-price?pool_address=0x...&chain_id=2&dex_id=1&days=30`
 
 Exemplo (pan):
-`/v1/pool-price?pool_id=572&start=2025-01-01T00:00:00Z&end=2025-01-31T00:00:00Z`
+`/v1/pool-price?pool_address=0x...&chain_id=2&dex_id=1&start=2025-01-01T00:00:00Z&end=2025-01-31T00:00:00Z`
 
 Notas:
-- O `price` atual usa o ultimo snapshot de `pool_hours` (token0_price, com fallback para sqrt_price_x96).
+- O `price` atual usa o ultimo snapshot de `pool_state_snapshots` (fallback em `pools.price_token0_per_token1` / `pools.sqrt_price_x96`).
 - Implementacao interna segue arquitetura Hexagonal:
   - adapter HTTP em `app/api/routers/pool_price.py`
   - use case em `app/application/use_cases/get_pool_price.py`
@@ -146,7 +203,7 @@ Erros possiveis:
 Resposta:
 ```json
 {
-  "pool_id": 572,
+  "pool_address": "0x...",
   "days": 30,
   "stats": {
     "min": "2850.12",
@@ -192,6 +249,66 @@ Resposta:
   "estimated_fees_24h": "12.34",
   "monthly": { "value": "370.2", "percent": "3.7" },
   "yearly": { "value": "4500.0", "apr": "0.45" }
+}
+```
+
+## POST /v1/simulate/apr
+Entrada:
+```json
+{
+  "pool_address": "0x4e68ccd3e89f51c3074ca5072bbac773960dfa36",
+  "chain_id": 1,
+  "dex_id": 2,
+  "deposit_usd": "10000",
+  "amount_token0": "1.2",
+  "amount_token1": "0",
+  "tick_lower": -201000,
+  "tick_upper": -195000,
+  "min_price": null,
+  "max_price": null,
+  "horizon": "14d",
+  "mode": "B",
+  "lookback_days": 14
+}
+```
+
+Notas:
+- A pool e resolvida por `pool_address + chain_id + dex_id`.
+- Informe range por ticks (`tick_lower`/`tick_upper`) ou por preco (`min_price`/`max_price`).
+- `horizon` e dinamico: aceita valores positivos como `24h`, `7d`, `14d`, `30d` (ou numero sem sufixo, interpretado como dias).
+- `mode=A` usa tick atual constante em todas as horas.
+- `mode=B` usa caminho horario de ticks por snapshots; se faltar snapshot em alguma hora, o calculo cai para tick atual nessa hora e retorna warning.
+- Se `deposit_usd` nao vier, a API tenta derivar a partir de `amount_token0/amount_token1` com preco atual da pool.
+- Se vier apenas `deposit_usd` (sem amounts), a API deriva `amount_token0/amount_token1` via preco atual (split 50/50) para calcular liquidez da posicao.
+- Implementacao interna segue arquitetura Hexagonal:
+  - adapter HTTP em `app/api/routers/simulate_apr.py`
+  - use case em `app/application/use_cases/simulate_apr.py`
+  - regras de dominio em `app/domain/services/univ3_math.py`, `app/domain/services/liquidity.py` e `app/domain/services/apr_simulation.py`
+  - SQL em `app/infrastructure/db/repositories/simulate_apr_repository.py`
+
+Erros possiveis:
+- `400` quando parametros forem invalidos.
+- `404` quando pool nao existir ou faltarem dados para a simulacao.
+
+Resposta:
+```json
+{
+  "estimated_fees_24h_usd": "12.34",
+  "monthly_usd": "370.20",
+  "yearly_usd": "4500.00",
+  "fee_apr": "0.45",
+  "diagnostics": {
+    "hours_total": 168,
+    "hours_in_range": 92,
+    "percent_time_in_range": "54.7619047619",
+    "avg_share_in_range": "0.0021",
+    "assumptions": {
+      "mode": "B",
+      "annualization": "7d",
+      "horizon_hours": "168"
+    },
+    "warnings": []
+  }
 }
 ```
 
@@ -249,16 +366,16 @@ Resposta:
 
 ## GET /v1/pools/by-address/{pool_address}
 Query params:
-- `network` (string).
+- `chain_id` (int).
 - `exchange_id` (int).
 
 Exemplo:
-`/v1/pools/by-address/0x...?network=arbitrum&exchange_id=1`
+`/v1/pools/by-address/0x...?chain_id=2&exchange_id=1`
 
 Resposta:
 ```json
 {
-  "id": 572,
+  "id": "0x...",
   "fee_tier": 500,
   "token0_address": "0x...",
   "token0_symbol": "WETH",

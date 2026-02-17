@@ -39,3 +39,11 @@ class MatchTicksInputError(DomainError):
 
 class DiscoverPoolsInputError(DomainError):
     """Parametros invalidos para busca no discover."""
+
+
+class InvalidSimulationInputError(DomainError):
+    """Parametros invalidos para simulacao de APR."""
+
+
+class SimulationDataNotFoundError(DomainError):
+    """Dados insuficientes para simular APR."""

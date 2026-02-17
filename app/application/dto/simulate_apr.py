@@ -1,0 +1,40 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from decimal import Decimal
+
+
+@dataclass(frozen=True)
+class SimulateAprInput:
+    pool_address: str
+    chain_id: int
+    dex_id: int
+    deposit_usd: Decimal | None
+    amount_token0: Decimal | None
+    amount_token1: Decimal | None
+    tick_lower: int | None
+    tick_upper: int | None
+    min_price: Decimal | None
+    max_price: Decimal | None
+    horizon: str
+    mode: str
+    lookback_days: int
+
+
+@dataclass(frozen=True)
+class SimulateAprDiagnosticsOutput:
+    hours_total: int
+    hours_in_range: int
+    percent_time_in_range: Decimal
+    avg_share_in_range: Decimal
+    assumptions: dict[str, str]
+    warnings: list[str]
+
+
+@dataclass(frozen=True)
+class SimulateAprOutput:
+    estimated_fees_24h_usd: Decimal
+    monthly_usd: Decimal
+    yearly_usd: Decimal
+    fee_apr: Decimal
+    diagnostics: SimulateAprDiagnosticsOutput

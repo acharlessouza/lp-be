@@ -26,5 +26,5 @@ class ListExchangeNetworkPoolsInput:
 @dataclass(frozen=True)
 class GetPoolByAddressInput:
     pool_address: str
-    network: str
+    chain_id: int
     exchange_id: int

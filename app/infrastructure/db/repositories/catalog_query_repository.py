@@ -137,24 +137,12 @@ class SqlCatalogQueryRepository(CatalogQueryPort):
         self,
         *,
         pool_address: str,
-        network: str,
+        chain_id: int,
         exchange_id: int,
     ) -> PoolDetail | None:
-        # O schema novo nao possui id numerico da pool; mantemos um id deterministico
-        # para preservar compatibilidade da resposta atual do endpoint.
         sql = """
             SELECT
-                (
-                    (
-                        'x' || substr(
-                            md5(
-                                p.dex_id::text || ':' || p.chain_id::text || ':' || lower(p.pool_address)
-                            ),
-                            1,
-                            8
-                        )
-                    )::bit(32)::int & 2147483647
-                ) AS id,
+                p.pool_address AS id,
                 COALESCE(p.fee_tier, 0) AS fee_tier,
                 p.token0_address,
                 COALESCE(t0.symbol, p.token0_address) AS token0_symbol,
@@ -163,8 +151,6 @@ class SqlCatalogQueryRepository(CatalogQueryPort):
                 COALESCE(t1.symbol, p.token1_address) AS token1_symbol,
                 COALESCE(t1.decimals, 0) AS token1_decimals
             FROM public.pools p
-            JOIN public.chains c
-              ON c.chain_id = p.chain_id
             LEFT JOIN public.tokens t0
               ON t0.chain_id = p.chain_id
              AND lower(t0.address) = lower(p.token0_address)
@@ -172,7 +158,7 @@ class SqlCatalogQueryRepository(CatalogQueryPort):
               ON t1.chain_id = p.chain_id
              AND lower(t1.address) = lower(p.token1_address)
             WHERE lower(p.pool_address) = :pool_address
-              AND lower(c.chain_key) = :network
+              AND p.chain_id = :chain_id
               AND p.dex_id = :exchange_id
               AND COALESCE(p.tvl_usd, 0) >= :min_tvl_usd
             ORDER BY p.dex_id, p.chain_id, p.pool_address
@@ -180,7 +166,7 @@ class SqlCatalogQueryRepository(CatalogQueryPort):
         """
         params = {
             "pool_address": pool_address.lower(),
-            "network": network.lower(),
+            "chain_id": chain_id,
             "exchange_id": exchange_id,
             "min_tvl_usd": self._min_tvl_usd,
         }

@@ -11,7 +11,7 @@ class SqlAllocationPoolRepository(AllocationPoolPort):
     def __init__(self, engine):
         self._engine = engine
 
-    def get_by_address(self, *, pool_address: str, network: str) -> Pool | None:
+    def get_by_address(self, *, pool_address: str, chain_id: int, dex_id: int) -> Pool | None:
         sql = """
             SELECT
                 c.chain_key AS network,
@@ -31,13 +31,15 @@ class SqlAllocationPoolRepository(AllocationPoolPort):
               ON t1.chain_id = p.chain_id
              AND lower(t1.address) = lower(p.token1_address)
             WHERE lower(p.pool_address) = :pool_address
-              AND lower(c.chain_key) = :network
+              AND p.chain_id = :chain_id
+              AND p.dex_id = :dex_id
             ORDER BY p.dex_id, p.chain_id, p.pool_address
             LIMIT 1
         """
         params = {
             "pool_address": pool_address.lower(),
-            "network": network.lower(),
+            "chain_id": chain_id,
+            "dex_id": dex_id,
         }
 
         with self._engine.connect() as conn:

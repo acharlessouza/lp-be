@@ -25,7 +25,9 @@ def _dec_to_str_or_none(value: Decimal | None) -> str | None:
 
 @router.get("/v1/pool-price", response_model=PoolPriceResponse)
 def get_pool_price(
-    pool_id: int,
+    pool_address: str,
+    chain_id: int,
+    dex_id: int,
     days: int | None = None,
     start: datetime | None = None,
     end: datetime | None = None,
@@ -35,7 +37,9 @@ def get_pool_price(
     try:
         result = use_case.execute(
             GetPoolPriceInput(
-                pool_id=pool_id,
+                pool_address=pool_address,
+                chain_id=chain_id,
+                dex_id=dex_id,
                 days=days,
                 start=start,
                 end=end,
@@ -49,7 +53,7 @@ def get_pool_price(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return PoolPriceResponse(
-        pool_id=result.pool_id,
+        pool_address=result.pool_address,
         days=result.days,
         stats=PoolPriceStatsResponse(
             min=_dec_to_str_or_none(result.min_price),

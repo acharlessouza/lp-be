@@ -7,7 +7,8 @@ from decimal import Decimal
 @dataclass(frozen=True)
 class AllocateInput:
     pool_address: str
-    network: str
+    chain_id: int
+    dex_id: int
     deposit_usd: Decimal
     range_min: Decimal
     range_max: Decimal

@@ -103,7 +103,7 @@ def list_exchange_network_pools(
 @router.get("/v1/pools/by-address/{pool_address}", response_model=PoolDetailResponse)
 def get_pool_by_address(
     pool_address: str,
-    network: str,
+    chain_id: int,
     exchange_id: int,
     _token: str = Depends(require_jwt),
     use_case: GetPoolByAddressUseCase = Depends(get_pool_by_address_use_case),
@@ -112,7 +112,7 @@ def get_pool_by_address(
         row = use_case.execute(
             GetPoolByAddressInput(
                 pool_address=pool_address,
-                network=network,
+                chain_id=chain_id,
                 exchange_id=exchange_id,
             )
         )

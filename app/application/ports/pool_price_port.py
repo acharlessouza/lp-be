@@ -7,26 +7,56 @@ from app.domain.entities.pool_price import PoolCurrentPrice, PoolPricePoint, Poo
 
 
 class PoolPricePort(Protocol):
-    def pool_exists(self, *, pool_id: int) -> bool:
+    def pool_exists(self, *, pool_address: str, chain_id: int, dex_id: int) -> bool:
         ...
 
-    def get_series(self, *, pool_id: int, days: int) -> list[PoolPricePoint]:
+    def get_series(
+        self,
+        *,
+        pool_address: str,
+        chain_id: int,
+        dex_id: int,
+        days: int,
+    ) -> list[PoolPricePoint]:
         ...
 
     def get_series_range(
         self,
         *,
-        pool_id: int,
+        pool_address: str,
+        chain_id: int,
+        dex_id: int,
         start: datetime,
         end: datetime,
     ) -> list[PoolPricePoint]:
         ...
 
-    def get_stats(self, *, pool_id: int, days: int) -> PoolPriceStats:
+    def get_stats(
+        self,
+        *,
+        pool_address: str,
+        chain_id: int,
+        dex_id: int,
+        days: int,
+    ) -> PoolPriceStats:
         ...
 
-    def get_stats_range(self, *, pool_id: int, start: datetime, end: datetime) -> PoolPriceStats:
+    def get_stats_range(
+        self,
+        *,
+        pool_address: str,
+        chain_id: int,
+        dex_id: int,
+        start: datetime,
+        end: datetime,
+    ) -> PoolPriceStats:
         ...
 
-    def get_latest_price(self, *, pool_id: int) -> PoolCurrentPrice | None:
+    def get_latest_price(
+        self,
+        *,
+        pool_address: str,
+        chain_id: int,
+        dex_id: int,
+    ) -> PoolCurrentPrice | None:
         ...

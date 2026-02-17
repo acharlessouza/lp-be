@@ -6,7 +6,9 @@ from datetime import date
 
 @dataclass(frozen=True)
 class GetLiquidityDistributionInput:
-    pool_id: int
+    pool_id: int | str
+    chain_id: int | None
+    dex_id: int | None
     snapshot_date: date
     current_tick: int
     center_tick: int | None

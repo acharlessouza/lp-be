@@ -12,7 +12,11 @@ class LiquidityDistributionPool:
     token1_symbol: str
     token0_decimals: int
     token1_decimals: int
+    fee_tier: int | None
+    tick_spacing: int | None
+    pool_tick: int | None
     current_tick: int | None
+    current_price_token1_per_token0: Decimal | None
     onchain_liquidity: Decimal | None
 
 

@@ -25,7 +25,7 @@ class PoolSummaryResponse(BaseModel):
 
 
 class PoolDetailResponse(BaseModel):
-    id: int
+    id: str
     fee_tier: int
     token0_address: str
     token0_symbol: str

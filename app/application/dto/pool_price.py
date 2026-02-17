@@ -9,7 +9,9 @@ from app.domain.entities.pool_price import PoolPricePoint
 
 @dataclass(frozen=True)
 class GetPoolPriceInput:
-    pool_id: int
+    pool_address: str
+    chain_id: int
+    dex_id: int
     days: int | None = None
     start: datetime | None = None
     end: datetime | None = None
@@ -17,7 +19,7 @@ class GetPoolPriceInput:
 
 @dataclass(frozen=True)
 class GetPoolPriceOutput:
-    pool_id: int
+    pool_address: str
     days: int
     min_price: Decimal | None
     max_price: Decimal | None

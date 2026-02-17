@@ -15,7 +15,8 @@ class AllocateUseCase:
     def execute(self, command: AllocateInput) -> AllocateOutput:
         pool = self._pool_port.get_by_address(
             pool_address=command.pool_address,
-            network=command.network,
+            chain_id=command.chain_id,
+            dex_id=command.dex_id,
         )
         if pool is None:
             raise PoolNotFoundError("Pool not found.")
