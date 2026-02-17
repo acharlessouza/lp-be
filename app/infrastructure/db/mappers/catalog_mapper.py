@@ -25,6 +25,11 @@ def map_row_to_pool_summary(row: Mapping[str, Any]) -> PoolSummary:
 def map_row_to_pool_detail(row: Mapping[str, Any]) -> PoolDetail:
     return PoolDetail(
         id=row["id"],
+        dex_key=row["dex_key"],
+        dex_name=row["dex_name"],
+        dex_version=row["dex_version"],
+        chain_key=row["chain_key"],
+        chain_name=row["chain_name"],
         fee_tier=row["fee_tier"],
         token0_address=row["token0_address"],
         token0_symbol=row["token0_symbol"],

@@ -26,6 +26,11 @@ class PoolSummaryResponse(BaseModel):
 
 class PoolDetailResponse(BaseModel):
     id: str
+    dex_key: str
+    dex_name: str
+    dex_version: str | None
+    chain_key: str
+    chain_name: str
     fee_tier: int
     token0_address: str
     token0_symbol: str

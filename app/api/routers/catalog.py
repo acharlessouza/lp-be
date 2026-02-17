@@ -121,6 +121,11 @@ def get_pool_by_address(
 
     return PoolDetailResponse(
         id=row.id,
+        dex_key=row.dex_key,
+        dex_name=row.dex_name,
+        dex_version=row.dex_version,
+        chain_key=row.chain_key,
+        chain_name=row.chain_name,
         fee_tier=row.fee_tier,
         token0_address=row.token0_address,
         token0_symbol=row.token0_symbol,

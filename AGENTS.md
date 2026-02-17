@@ -204,6 +204,10 @@ Use case **não**:
 - Router não chama DB direto.
 - Router não implementa regra de negócio.
 
+### 7.3. Padrão de versionamento de rota
+- **Obrigatório**: todo endpoint HTTP deve usar prefixo de versão `/v1`.
+- Mesmo que um prompt solicite outro padrão (ex.: `/api/...`), a implementação final no projeto deve seguir `/v1/...`.
+
 ---
 
 ## 8) Banco de Dados e SQL (Adapter de Saída)

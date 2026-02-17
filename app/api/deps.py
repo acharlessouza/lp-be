@@ -13,6 +13,7 @@ from app.application.use_cases.get_liquidity_distribution_default_range import (
 )
 from app.application.use_cases.get_pool_by_address import GetPoolByAddressUseCase
 from app.application.use_cases.get_pool_price import GetPoolPriceUseCase
+from app.application.use_cases.get_pool_volume_history import GetPoolVolumeHistoryUseCase
 from app.application.use_cases.list_exchange_network_pools import (
     ListExchangeNetworkPoolsUseCase,
 )
@@ -37,6 +38,9 @@ from app.infrastructure.db.repositories.liquidity_distribution_repository import
 )
 from app.infrastructure.db.repositories.match_ticks_repository import SqlMatchTicksRepository
 from app.infrastructure.db.repositories.pool_price_repository import SqlPoolPriceRepository
+from app.infrastructure.db.repositories.pool_volume_history_repository import (
+    SqlPoolVolumeHistoryRepository,
+)
 from app.infrastructure.db.repositories.simulate_apr_repository import SqlSimulateAprRepository
 from app.shared.config import get_settings
 
@@ -132,3 +136,9 @@ def get_discover_pools_use_case() -> DiscoverPoolsUseCase:
 
 def get_simulate_apr_use_case() -> SimulateAprUseCase:
     return SimulateAprUseCase(simulate_apr_port=SqlSimulateAprRepository(_get_db_engine()))
+
+
+def get_pool_volume_history_use_case() -> GetPoolVolumeHistoryUseCase:
+    return GetPoolVolumeHistoryUseCase(
+        pool_volume_history_port=SqlPoolVolumeHistoryRepository(_get_db_engine())
+    )

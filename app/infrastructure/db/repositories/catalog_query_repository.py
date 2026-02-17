@@ -143,6 +143,11 @@ class SqlCatalogQueryRepository(CatalogQueryPort):
         sql = """
             SELECT
                 p.pool_address AS id,
+                d.dex_key,
+                d.name AS dex_name,
+                CAST(d.version AS text) AS dex_version,
+                c.chain_key,
+                c.name AS chain_name,
                 COALESCE(p.fee_tier, 0) AS fee_tier,
                 p.token0_address,
                 COALESCE(t0.symbol, p.token0_address) AS token0_symbol,
@@ -151,6 +156,10 @@ class SqlCatalogQueryRepository(CatalogQueryPort):
                 COALESCE(t1.symbol, p.token1_address) AS token1_symbol,
                 COALESCE(t1.decimals, 0) AS token1_decimals
             FROM public.pools p
+            JOIN public.dexes d
+              ON d.dex_id = p.dex_id
+            JOIN public.chains c
+              ON c.chain_id = p.chain_id
             LEFT JOIN public.tokens t0
               ON t0.chain_id = p.chain_id
              AND lower(t0.address) = lower(p.token0_address)

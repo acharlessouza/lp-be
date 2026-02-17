@@ -32,6 +32,7 @@
 - `POST /v1/liquidity-distribution`.
 - `POST /v1/liquidity-distribution/default-range`.
 - `GET /v1/pool-price`.
+- `GET /v1/pools/{pool_address}/volume-history`.
 - `POST /v1/estimated-fees`.
 - `POST /v1/simulate/apr`.
 - `GET /v1/exchanges`.
@@ -252,6 +253,59 @@ Resposta:
 }
 ```
 
+## GET /v1/pools/{pool_address}/volume-history
+Query params:
+- `days` (obrigatorio): quantidade de dias fechados (UTC) a retornar.
+- `chainId` (opcional): filtra por chain quando informado.
+- `dexId` (opcional): filtra por dex quando informado.
+- `includePremium` (opcional, default `false`): mantido por compatibilidade.
+- `exchange` (opcional, default `binance`): mantido por compatibilidade.
+- `symbol0` e `symbol1` (opcionais): mantidos por compatibilidade.
+
+Regras:
+- Considera apenas dias fechados (UTC), excluindo o dia atual.
+- Janela temporal: `start = today_utc - days`, `end = today_utc` (end exclusivo).
+- Agregacao por dia UTC em `public.pool_hourly`:
+  - `value = SUM(volume_usd)`
+  - `fees_usd = SUM(COALESCE(fees_usd, 0))`
+- `price_volatility_pct`, `correlation` e `geometric_mean_price` retornam sempre `null`.
+- Retorna `200` com `[]` quando nao houver dados no periodo.
+
+Erros possiveis:
+- `400` quando `days` for invalido (`< 1` ou `> 365`) ou parametros invalidos.
+
+Exemplo cURL:
+```bash
+curl "http://localhost:8000/v1/pools/0x4e68ccd3e89f51c3074ca5072bbac773960dfa36/volume-history?days=7&chainId=1&dexId=2" \
+  -H "Authorization: Bearer <token>"
+```
+
+Resposta:
+```json
+{
+  "volume_history": [
+    { "time": "2026-02-09", "value": "9823.45", "fees_usd": "29.47" },
+    { "time": "2026-02-10", "value": "12345.67", "fees_usd": "37.04" }
+  ],
+  "summary": {
+    "tvl_usd": "61380000.00",
+    "avg_daily_fees_usd": "150720.00",
+    "daily_fees_tvl_pct": "0.2456",
+    "avg_daily_volume_usd": "50240000.00",
+    "daily_volume_tvl_pct": "81.86",
+    "price_volatility_pct": null,
+    "correlation": null,
+    "geometric_mean_price": null
+  }
+}
+```
+
+Indice sugerido (se ainda nao existir):
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_pool_hourly_pool_time
+ON public.pool_hourly (pool_address, hour_start);
+```
+
 ## POST /v1/simulate/apr
 Entrada:
 ```json
@@ -372,6 +426,11 @@ Resposta:
 ```json
 {
   "id": "0x...",
+  "dex_key": "uniswap-v3",
+  "dex_name": "Uniswap",
+  "dex_version": "v3",
+  "chain_key": "arbitrum",
+  "chain_name": "Arbitrum",
   "fee_tier": 500,
   "token0_address": "0x...",
   "token0_symbol": "WETH",

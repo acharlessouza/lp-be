@@ -47,3 +47,7 @@ class InvalidSimulationInputError(DomainError):
 
 class SimulationDataNotFoundError(DomainError):
     """Dados insuficientes para simular APR."""
+
+
+class PoolVolumeHistoryInputError(DomainError):
+    """Parametros invalidos para historico de volume da pool."""
