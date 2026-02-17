@@ -268,6 +268,8 @@ Entrada:
   "max_price": null,
   "horizon": "14d",
   "mode": "B",
+  "calculation_method": "current",
+  "custom_calculation_price": null,
   "lookback_days": 14
 }
 ```
@@ -278,6 +280,12 @@ Notas:
 - `horizon` e dinamico: aceita valores positivos como `24h`, `7d`, `14d`, `30d` (ou numero sem sufixo, interpretado como dias).
 - `mode=A` usa tick atual constante em todas as horas.
 - `mode=B` usa caminho horario de ticks por snapshots; se faltar snapshot em alguma hora, o calculo cai para tick atual nessa hora e retorna warning.
+- `calculation_method` aceita:
+  - `current` (Current Price)
+  - `avg_liquidity_in_range` (Average Liquidity In-Range)
+  - `peak_liquidity_in_range` (Peak of Distribution In-Range)
+  - `custom` (Custom Price)
+- Quando `calculation_method=custom`, `custom_calculation_price` e obrigatorio e deve ser > 0.
 - Se `deposit_usd` nao vier, a API tenta derivar a partir de `amount_token0/amount_token1` com preco atual da pool.
 - Se vier apenas `deposit_usd` (sem amounts), a API deriva `amount_token0/amount_token1` via preco atual (split 50/50) para calcular liquidez da posicao.
 - Implementacao interna segue arquitetura Hexagonal:
@@ -296,19 +304,7 @@ Resposta:
   "estimated_fees_24h_usd": "12.34",
   "monthly_usd": "370.20",
   "yearly_usd": "4500.00",
-  "fee_apr": "0.45",
-  "diagnostics": {
-    "hours_total": 168,
-    "hours_in_range": 92,
-    "percent_time_in_range": "54.7619047619",
-    "avg_share_in_range": "0.0021",
-    "assumptions": {
-      "mode": "B",
-      "annualization": "7d",
-      "horizon_hours": "168"
-    },
-    "warnings": []
-  }
+  "fee_apr": "0.45"
 }
 ```
 

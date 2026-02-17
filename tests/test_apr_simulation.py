@@ -37,10 +37,10 @@ class AprSimulationDomainTests(unittest.TestCase):
 
         self.assertEqual(result.diagnostics.hours_total, 3)
         self.assertEqual(result.diagnostics.hours_in_range, 3)
-        self.assertEqual(result.estimated_fees_24h_usd, Decimal("15"))
-        self.assertEqual(result.monthly_usd, Decimal("450"))
-        self.assertEqual(result.yearly_usd, Decimal("5475"))
-        self.assertEqual(result.fee_apr, Decimal("5.475"))
+        self.assertEqual(result.estimated_fees_24h_usd, Decimal("120"))
+        self.assertEqual(result.monthly_usd, Decimal("3600"))
+        self.assertEqual(result.yearly_usd, Decimal("43800"))
+        self.assertEqual(result.fee_apr, Decimal("43.8"))
 
     def test_out_of_range_produces_zero_fees(self):
         base = datetime(2026, 1, 1, 0, 0, 0)

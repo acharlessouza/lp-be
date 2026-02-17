@@ -18,17 +18,9 @@ class SimulateAprInput:
     max_price: Decimal | None
     horizon: str
     mode: str
+    calculation_method: str
+    custom_calculation_price: Decimal | None
     lookback_days: int
-
-
-@dataclass(frozen=True)
-class SimulateAprDiagnosticsOutput:
-    hours_total: int
-    hours_in_range: int
-    percent_time_in_range: Decimal
-    avg_share_in_range: Decimal
-    assumptions: dict[str, str]
-    warnings: list[str]
 
 
 @dataclass(frozen=True)
@@ -37,4 +29,3 @@ class SimulateAprOutput:
     monthly_usd: Decimal
     yearly_usd: Decimal
     fee_apr: Decimal
-    diagnostics: SimulateAprDiagnosticsOutput

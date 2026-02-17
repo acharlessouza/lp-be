@@ -22,6 +22,7 @@ Este projeto deve seguir **Arquitetura Hexagonal (Ports & Adapters)**.
 3. **Sem “métodos que fazem tudo”**: carregar dados + calcular + formatar resposta + persistir deve ser dividido por responsabilidades.
 4. **Trocar query/fonte de dados não pode exigir alterar cálculo**: mudanças de schema, query, joins, import, índices, etc. devem ficar confinadas ao adapter (infra) desde que o contrato (port) seja mantido.
 5. **Toda feature deve nascer já neste padrão**: durante migração pode coexistir código legado, mas todo código novo segue o padrão alvo.
+6. **É proibido usar fallback no fluxo de negócio**: as implementações devem funcionar no **fluxo principal**. Se faltar dado obrigatório, o comportamento correto é falhar explicitamente com erro claro (não degradar para caminho alternativo silencioso).
 
 ---
 
@@ -262,6 +263,7 @@ Toda atividade (feature/bugfix/refactor) deve vir com:
 - [ ] SQL ficou apenas em `infrastructure/db`
 - [ ] Cálculo de negócio está único e reutilizável
 - [ ] Mudança de query/fonte não exigiria mexer no cálculo (port estável)
+- [ ] Não foi implementado fallback no fluxo principal; ausência de dado obrigatório retorna erro explícito
 
 ---
 

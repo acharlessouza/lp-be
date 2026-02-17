@@ -5,7 +5,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.api.auth import require_jwt
 from app.api.deps import get_simulate_apr_use_case
 from app.api.schemas.simulate_apr import (
-    SimulateAprDiagnosticsResponse,
     SimulateAprRequest,
     SimulateAprResponse,
 )
@@ -41,6 +40,8 @@ def simulate_apr(
                 max_price=req.max_price,
                 horizon=req.horizon,
                 mode=req.mode,
+                calculation_method=req.calculation_method,
+                custom_calculation_price=req.custom_calculation_price,
                 lookback_days=req.lookback_days,
             )
         )
@@ -56,12 +57,4 @@ def simulate_apr(
         monthly_usd=result.monthly_usd,
         yearly_usd=result.yearly_usd,
         fee_apr=result.fee_apr,
-        diagnostics=SimulateAprDiagnosticsResponse(
-            hours_total=result.diagnostics.hours_total,
-            hours_in_range=result.diagnostics.hours_in_range,
-            percent_time_in_range=result.diagnostics.percent_time_in_range,
-            avg_share_in_range=result.diagnostics.avg_share_in_range,
-            assumptions=result.diagnostics.assumptions,
-            warnings=result.diagnostics.warnings,
-        ),
     )

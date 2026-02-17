@@ -75,7 +75,6 @@ class SqlSimulateAprRepository(SimulateAprPort):
             SELECT
                 COALESCE(s.tick, p.tick) AS tick,
                 COALESCE(s.sqrt_price_x96, p.sqrt_price_x96) AS sqrt_price_x96,
-                p.price_token0_per_token1,
                 COALESCE(s.liquidity, p.liquidity) AS liquidity
             FROM public.pools p
             LEFT JOIN LATERAL (

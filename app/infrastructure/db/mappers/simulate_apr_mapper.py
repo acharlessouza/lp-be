@@ -29,9 +29,6 @@ def map_row_to_simulate_apr_pool_state(row: Mapping[str, Any]) -> SimulateAprPoo
     return SimulateAprPoolState(
         tick=int(row["tick"]) if row["tick"] is not None else None,
         sqrt_price_x96=int(row["sqrt_price_x96"]) if row["sqrt_price_x96"] is not None else None,
-        price_token0_per_token1=Decimal(str(row["price_token0_per_token1"]))
-        if row["price_token0_per_token1"] is not None
-        else None,
         liquidity=Decimal(str(row["liquidity"])) if row["liquidity"] is not None else None,
     )
 

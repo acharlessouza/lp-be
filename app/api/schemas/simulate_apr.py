@@ -18,16 +18,15 @@ class SimulateAprRequest(BaseModel):
     max_price: Decimal | None = Field(None, description="Preco maximo token1/token0.")
     horizon: str = Field("7d", description="Horizonte dinamico (ex.: 24h, 7d, 14d, 30d).")
     mode: str = Field("A", description="Modo de simulacao: A (tick constante) ou B (tick path).")
+    calculation_method: str = Field(
+        "current",
+        description="Metodo de calculo: current|avg_liquidity_in_range|peak_liquidity_in_range|custom.",
+    )
+    custom_calculation_price: Decimal | None = Field(
+        None,
+        description="Preco customizado (obrigatorio quando calculation_method=custom).",
+    )
     lookback_days: int = Field(7, ge=1, description="Dias de historico para leitura de horas.")
-
-
-class SimulateAprDiagnosticsResponse(BaseModel):
-    hours_total: int
-    hours_in_range: int
-    percent_time_in_range: Decimal
-    avg_share_in_range: Decimal
-    assumptions: dict[str, str]
-    warnings: list[str]
 
 
 class SimulateAprResponse(BaseModel):
@@ -35,4 +34,3 @@ class SimulateAprResponse(BaseModel):
     monthly_usd: Decimal
     yearly_usd: Decimal
     fee_apr: Decimal
-    diagnostics: SimulateAprDiagnosticsResponse

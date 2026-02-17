@@ -20,7 +20,6 @@ class SimulateAprPool:
 class SimulateAprPoolState:
     tick: int | None
     sqrt_price_x96: int | None
-    price_token0_per_token1: Decimal | None
     liquidity: Decimal | None
 
 

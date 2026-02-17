@@ -1,17 +1,23 @@
 from __future__ import annotations
 
+import logging
 import re
 from decimal import Decimal
 
 from app.application.dto.simulate_apr import (
-    SimulateAprDiagnosticsOutput,
     SimulateAprInput,
     SimulateAprOutput,
 )
 from app.application.ports.simulate_apr_port import SimulateAprPort
+from app.domain.entities.simulate_apr import SimulateAprInitializedTick, SimulateAprPool, SimulateAprPoolState
 from app.domain.exceptions import InvalidSimulationInputError, PoolNotFoundError, SimulationDataNotFoundError
 from app.domain.services.apr_simulation import simulate_fee_apr
-from app.domain.services.liquidity import build_liquidity_curve, position_liquidity_v3
+from app.domain.services.liquidity import (
+    LiquidityCurve,
+    active_liquidity_at_tick,
+    build_liquidity_curve,
+    position_liquidity_v3,
+)
 from app.domain.services.univ3_math import (
     price_to_tick_ceil,
     price_to_tick_floor,
@@ -23,6 +29,8 @@ from app.domain.services.univ3_math import (
 
 
 HORIZON_PATTERN = re.compile(r"^\s*(\d+)\s*([dDhH]?)\s*$")
+CALCULATION_METHODS = {"current", "avg_liquidity_in_range", "peak_liquidity_in_range", "custom"}
+logger = logging.getLogger(__name__)
 
 
 class SimulateAprUseCase:
@@ -42,6 +50,17 @@ class SimulateAprUseCase:
         mode = command.mode.strip().upper()
         if mode not in {"A", "B"}:
             raise InvalidSimulationInputError("mode must be A or B.")
+
+        calculation_method = command.calculation_method.strip().lower()
+        if calculation_method not in CALCULATION_METHODS:
+            raise InvalidSimulationInputError(
+                "calculation_method must be one of: current, avg_liquidity_in_range, peak_liquidity_in_range, custom."
+            )
+        if calculation_method == "custom":
+            if command.custom_calculation_price is None or command.custom_calculation_price <= 0:
+                raise InvalidSimulationInputError(
+                    "custom_calculation_price must be provided and > 0 when calculation_method=custom."
+                )
 
         if command.deposit_usd is None and command.amount_token0 is None and command.amount_token1 is None:
             raise InvalidSimulationInputError(
@@ -116,25 +135,31 @@ class SimulateAprUseCase:
             raise SimulationDataNotFoundError("Initialized ticks not found for pool.")
 
         liquidity_curve = build_liquidity_curve(initialized_ticks)
-
-        current_price = self._resolve_current_price(
+        calculation_price = self._resolve_calculation_price(
+            method=calculation_method,
+            custom_price=command.custom_calculation_price,
             current_tick=current_tick,
             latest_state=latest_state,
-            token0_decimals=pool.token0_decimals,
-            token1_decimals=pool.token1_decimals,
+            pool=pool,
+            liquidity_curve=liquidity_curve,
+            tick_lower=tick_lower,
+            tick_upper=tick_upper,
+            initialized_ticks=initialized_ticks,
+            warnings=warnings,
         )
+        if calculation_price <= 0:
+            raise InvalidSimulationInputError("calculation_price must be positive.")
+
         if (
             command.deposit_usd is not None
             and command.deposit_usd > 0
             and amount_token0 == 0
             and amount_token1 == 0
-            and current_price is not None
-            and current_price > 0
         ):
             usd_half = command.deposit_usd / Decimal("2")
-            amount_token0 = usd_half / current_price
+            amount_token0 = usd_half / calculation_price
             amount_token1 = usd_half
-            warnings.append("Derived token amounts from deposit_usd using current pool price (50/50 split).")
+            warnings.append("Derived token amounts from deposit_usd using calculation price (50/50 split).")
 
         sqrt_price_current = None
         if latest_state.sqrt_price_x96 is not None and latest_state.sqrt_price_x96 > 0:
@@ -158,13 +183,13 @@ class SimulateAprUseCase:
 
         deposit_usd = command.deposit_usd
         if deposit_usd is None:
-            if current_price is not None:
-                deposit_usd = amount_token1 + (amount_token0 * current_price)
+            if calculation_price > 0:
+                deposit_usd = amount_token1 + (amount_token0 * calculation_price)
                 warnings.append(
-                    "deposit_usd derived from amount_token0/amount_token1 using current pool price."
+                    "deposit_usd derived from amount_token0/amount_token1 using calculation price."
                 )
             else:
-                warnings.append("Could not derive deposit_usd from amounts and current price.")
+                warnings.append("Could not derive deposit_usd from amounts and calculation price.")
 
         simulation = simulate_fee_apr(
             hourly_fees=hourly_fees,
@@ -181,27 +206,14 @@ class SimulateAprUseCase:
             warnings=warnings,
         )
 
-        diagnostics = SimulateAprDiagnosticsOutput(
-            hours_total=simulation.diagnostics.hours_total,
-            hours_in_range=simulation.diagnostics.hours_in_range,
-            percent_time_in_range=simulation.diagnostics.percent_time_in_range,
-            avg_share_in_range=simulation.diagnostics.avg_share_in_range,
-            assumptions={
-                "mode": mode,
-                "annualization": command.horizon.strip().lower(),
-                "horizon_hours": str(horizon_hours),
-            },
-            warnings=simulation.diagnostics.warnings,
-        )
         return SimulateAprOutput(
             estimated_fees_24h_usd=simulation.estimated_fees_24h_usd,
             monthly_usd=simulation.monthly_usd,
             yearly_usd=simulation.yearly_usd,
             fee_apr=simulation.fee_apr,
-            diagnostics=diagnostics,
         )
 
-    def _resolve_range_ticks(self, *, command: SimulateAprInput, pool) -> tuple[int, int]:
+    def _resolve_range_ticks(self, *, command: SimulateAprInput, pool: SimulateAprPool) -> tuple[int, int]:
         if command.tick_lower is not None or command.tick_upper is not None:
             if command.tick_lower is None or command.tick_upper is None:
                 raise InvalidSimulationInputError("tick_lower and tick_upper must be provided together.")
@@ -239,12 +251,10 @@ class SimulateAprUseCase:
         self,
         *,
         current_tick: int,
-        latest_state,
+        latest_state: SimulateAprPoolState,
         token0_decimals: int,
         token1_decimals: int,
-    ) -> Decimal | None:
-        if latest_state.price_token0_per_token1 is not None and latest_state.price_token0_per_token1 > 0:
-            return latest_state.price_token0_per_token1
+    ) -> Decimal:
         if latest_state.sqrt_price_x96 is not None and latest_state.sqrt_price_x96 > 0:
             return sqrt_price_x96_to_price(
                 latest_state.sqrt_price_x96,
@@ -252,6 +262,145 @@ class SimulateAprUseCase:
                 token1_decimals,
             )
         return tick_to_price(current_tick, token0_decimals, token1_decimals)
+
+    def _resolve_calculation_price(
+        self,
+        *,
+        method: str,
+        custom_price: Decimal | None,
+        current_tick: int,
+        latest_state: SimulateAprPoolState,
+        pool: SimulateAprPool,
+        liquidity_curve: LiquidityCurve,
+        tick_lower: int,
+        tick_upper: int,
+        initialized_ticks: list[SimulateAprInitializedTick],
+        warnings: list[str] | None = None,
+    ) -> Decimal:
+        current_price = self._resolve_current_price(
+            current_tick=current_tick,
+            latest_state=latest_state,
+            token0_decimals=pool.token0_decimals,
+            token1_decimals=pool.token1_decimals,
+        )
+
+        if method == "current":
+            return current_price
+
+        if method == "custom":
+            if custom_price is None or custom_price <= 0:
+                raise InvalidSimulationInputError(
+                    "custom_calculation_price must be provided and > 0 when calculation_method=custom."
+                )
+            return custom_price
+
+        candidates = self._build_tick_candidates(
+            initialized_ticks=initialized_ticks,
+            tick_lower=tick_lower,
+            tick_upper=tick_upper,
+        )
+        if not candidates:
+            if warnings is not None:
+                warnings.append(
+                    f"No initialized tick candidate in range for method={method}; using current price."
+                )
+            logger.warning(
+                "simulate_apr: no candidates for method=%s in range [%s, %s], using current price",
+                method,
+                tick_lower,
+                tick_upper,
+            )
+            return current_price
+
+        if method == "peak_liquidity_in_range":
+            peak_tick = self._find_peak_tick(
+                candidates=candidates,
+                liquidity_curve=liquidity_curve,
+                current_tick=current_tick,
+            )
+            return tick_to_price(peak_tick, pool.token0_decimals, pool.token1_decimals)
+
+        if method == "avg_liquidity_in_range":
+            avg_tick = self._find_weighted_avg_tick(
+                candidates=candidates,
+                liquidity_curve=liquidity_curve,
+            )
+            if avg_tick is None:
+                if warnings is not None:
+                    warnings.append(
+                        "Weighted average liquidity is non-positive in range; using current price."
+                    )
+                logger.warning(
+                    "simulate_apr: weighted average liquidity non-positive for range [%s, %s], using current price",
+                    tick_lower,
+                    tick_upper,
+                )
+                return current_price
+            return tick_to_price(avg_tick, pool.token0_decimals, pool.token1_decimals)
+
+        raise InvalidSimulationInputError("Unsupported calculation_method.")
+
+    def _build_tick_candidates(
+        self,
+        *,
+        initialized_ticks: list[SimulateAprInitializedTick],
+        tick_lower: int,
+        tick_upper: int,
+    ) -> list[int]:
+        unique_ticks = {
+            row.tick_idx
+            for row in initialized_ticks
+            if tick_lower <= row.tick_idx <= tick_upper
+        }
+        return sorted(unique_ticks)
+
+    def _find_peak_tick(
+        self,
+        *,
+        candidates: list[int],
+        liquidity_curve: LiquidityCurve,
+        current_tick: int,
+    ) -> int:
+        best_tick: int | None = None
+        best_liquidity = Decimal("-1")
+        best_distance: int | None = None
+        for tick in candidates:
+            liquidity = active_liquidity_at_tick(curve=liquidity_curve, tick=tick)
+            distance = abs(tick - current_tick)
+            if (
+                best_tick is None
+                or liquidity > best_liquidity
+                or (
+                    liquidity == best_liquidity
+                    and best_distance is not None
+                    and (distance < best_distance or (distance == best_distance and tick < best_tick))
+                )
+            ):
+                best_tick = tick
+                best_liquidity = liquidity
+                best_distance = distance
+        if best_tick is None:
+            raise InvalidSimulationInputError("Could not determine peak tick.")
+        return best_tick
+
+    def _find_weighted_avg_tick(
+        self,
+        *,
+        candidates: list[int],
+        liquidity_curve: LiquidityCurve,
+    ) -> int | None:
+        sum_w = Decimal("0")
+        sum_wt = Decimal("0")
+        for tick in candidates:
+            liquidity = active_liquidity_at_tick(curve=liquidity_curve, tick=tick)
+            if liquidity <= 0:
+                continue
+            sum_w += liquidity
+            sum_wt += liquidity * Decimal(tick)
+
+        if sum_w <= 0:
+            return None
+        return int((sum_wt / sum_w).to_integral_value())
 
     def _parse_horizon(self, horizon_raw: str) -> tuple[int, Decimal]:
         raw = horizon_raw.strip().lower()
