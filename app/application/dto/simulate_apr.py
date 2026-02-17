@@ -12,6 +12,7 @@ class SimulateAprInput:
     deposit_usd: Decimal | None
     amount_token0: Decimal | None
     amount_token1: Decimal | None
+    full_range: bool
     tick_lower: int | None
     tick_upper: int | None
     min_price: Decimal | None

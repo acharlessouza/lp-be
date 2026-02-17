@@ -81,7 +81,7 @@ def calculate_preset_range(
 
 
 def _price_to_tick_value(price: float, token0_decimals: int, token1_decimals: int) -> float:
-    if price <= 0:
+    if price < 0:
         raise ValueError("price must be positive.")
 
     decimal_adjust = 10 ** (token0_decimals - token1_decimals)

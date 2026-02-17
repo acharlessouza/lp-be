@@ -25,6 +25,7 @@ def allocate(
                 chain_id=req.chain_id,
                 dex_id=req.dex_id,
                 deposit_usd=req.amount,
+                full_range=req.full_range,
                 range_min=req.range1,
                 range_max=req.range2,
             )

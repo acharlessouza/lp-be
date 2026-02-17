@@ -26,6 +26,7 @@ from app.domain.services.univ3_math import (
 
 class FakeSimulateAprPort:
     def __init__(self):
+        self.get_initialized_ticks_calls = 0
         self._pool = SimulateAprPool(
             dex_id=2,
             chain_id=1,
@@ -100,6 +101,7 @@ class FakeSimulateAprPort:
         min_tick: int,
         max_tick: int,
     ) -> list[SimulateAprInitializedTick]:
+        self.get_initialized_ticks_calls += 1
         _ = (pool_address, chain_id, dex_id, min_tick, max_tick)
         return [
             SimulateAprInitializedTick(tick_idx=-300000, liquidity_net=Decimal("1000000")),
@@ -116,6 +118,7 @@ class SimulateAprUseCaseTests(unittest.TestCase):
             "deposit_usd": Decimal("1000"),
             "amount_token0": Decimal("1"),
             "amount_token1": Decimal("0"),
+            "full_range": False,
             "tick_lower": -210000,
             "tick_upper": -190000,
             "min_price": None,
@@ -302,6 +305,72 @@ class SimulateAprUseCaseTests(unittest.TestCase):
                     if isinstance(class_node, ast.AnnAssign) and isinstance(class_node.target, ast.Name):
                         response_fields.add(class_node.target.id)
         self.assertNotIn("diagnostics", response_fields)
+
+    def test_full_range_does_not_require_ticks_or_prices_and_skips_initialized_ticks(self):
+        port = FakeSimulateAprPort()
+        use_case = SimulateAprUseCase(simulate_apr_port=port)
+
+        result = use_case.execute(
+            self._base_input(
+                full_range=True,
+                tick_lower=None,
+                tick_upper=None,
+                min_price=None,
+                max_price=None,
+            )
+        )
+
+        self.assertGreaterEqual(result.estimated_fees_24h_usd, Decimal("0"))
+        self.assertEqual(port.get_initialized_ticks_calls, 0)
+
+    def test_full_range_requires_valid_tick_spacing(self):
+        port = FakeSimulateAprPort()
+        port._pool = SimulateAprPool(
+            dex_id=2,
+            chain_id=1,
+            pool_address="0x4e68ccd3e89f51c3074ca5072bbac773960dfa36",
+            token0_decimals=18,
+            token1_decimals=6,
+            fee_tier=3000,
+            tick_spacing=None,
+        )
+        use_case = SimulateAprUseCase(simulate_apr_port=port)
+
+        with self.assertRaises(InvalidSimulationInputError):
+            use_case.execute(
+                self._base_input(
+                    full_range=True,
+                    tick_lower=None,
+                    tick_upper=None,
+                    min_price=None,
+                    max_price=None,
+                )
+            )
+
+    def test_full_range_ticks_are_aligned_with_tick_spacing(self):
+        use_case = SimulateAprUseCase(simulate_apr_port=FakeSimulateAprPort())
+        pool = SimulateAprPool(
+            dex_id=2,
+            chain_id=1,
+            pool_address="0xpool",
+            token0_decimals=18,
+            token1_decimals=6,
+            fee_tier=3000,
+            tick_spacing=60,
+        )
+        tick_lower, tick_upper = use_case._resolve_range_ticks(
+            command=self._base_input(
+                full_range=True,
+                tick_lower=None,
+                tick_upper=None,
+                min_price=None,
+                max_price=None,
+            ),
+            pool=pool,
+        )
+
+        self.assertEqual(tick_lower, -887280)
+        self.assertEqual(tick_upper, 887280)
 
 
 if __name__ == "__main__":

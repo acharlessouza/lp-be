@@ -11,7 +11,7 @@ class MatchTicksUseCase:
         self._match_ticks_port = match_ticks_port
 
     def execute(self, command: MatchTicksInput) -> MatchTicksOutput:
-        if command.min_price <= 0 or command.max_price <= 0:
+        if command.min_price < 0 or command.max_price < 0:
             raise MatchTicksInputError("min_price and max_price must be positive.")
         if command.min_price >= command.max_price:
             raise MatchTicksInputError("min_price must be lower than max_price.")

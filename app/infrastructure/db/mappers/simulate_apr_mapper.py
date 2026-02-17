@@ -45,6 +45,7 @@ def map_row_to_simulate_apr_snapshot_hourly(row: Mapping[str, Any]) -> SimulateA
     return SimulateAprSnapshotHourly(
         hour_ts=row["hour_ts"],
         tick=int(row["tick"]) if row["tick"] is not None else None,
+        liquidity=Decimal(str(row["liquidity"])) if row.get("liquidity") is not None else None,
     )
 
 

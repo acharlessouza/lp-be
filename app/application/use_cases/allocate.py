@@ -3,8 +3,8 @@ from __future__ import annotations
 from app.application.dto.allocate import AllocateInput, AllocateOutput
 from app.application.ports.allocation_pool_port import AllocationPoolPort
 from app.application.ports.token_price_port import TokenPricePort
-from app.domain.exceptions import PoolNotFoundError
-from app.domain.services.allocation import split_deposit_range
+from app.domain.exceptions import AllocationInputError, PoolNotFoundError
+from app.domain.services.allocation import split_deposit_full_range_equal_value, split_deposit_range
 
 
 class AllocateUseCase:
@@ -27,14 +27,24 @@ class AllocateUseCase:
             network=pool.network,
         )
 
-        # Mantem o comportamento atual da API: alocacao usa token1 em 1 USD.
-        amounts = split_deposit_range(
-            deposit_usd=command.deposit_usd,
-            price_token0_usd=price0,
-            price_token1_usd=1,
-            range_min=command.range_min,
-            range_max=command.range_max,
-        )
+        if command.full_range:
+            amounts = split_deposit_full_range_equal_value(
+                deposit_usd=command.deposit_usd,
+                price_token0_usd=price0,
+                price_token1_usd=price1,
+            )
+        else:
+            if command.range_min is None or command.range_max is None:
+                raise AllocationInputError("range1 and range2 are required when full_range is false.")
+
+            # Mantem o comportamento atual da API: alocacao por range usa token1 em 1 USD.
+            amounts = split_deposit_range(
+                deposit_usd=command.deposit_usd,
+                price_token0_usd=price0,
+                price_token1_usd=1,
+                range_min=command.range_min,
+                range_max=command.range_max,
+            )
 
         return AllocateOutput(
             pool_address=pool.pool_address,

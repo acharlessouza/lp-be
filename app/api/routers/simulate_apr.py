@@ -34,6 +34,7 @@ def simulate_apr(
                 deposit_usd=req.deposit_usd,
                 amount_token0=req.amount_token0,
                 amount_token1=req.amount_token1,
+                full_range=req.full_range,
                 tick_lower=req.tick_lower,
                 tick_upper=req.tick_upper,
                 min_price=req.min_price,

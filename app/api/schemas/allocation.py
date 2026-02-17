@@ -10,8 +10,9 @@ class AllocationRequest(BaseModel):
     chain_id: int = Field(..., gt=0, description="Chain ID da pool.")
     dex_id: int = Field(..., gt=0, description="Dex ID da pool.")
     amount: Decimal = Field(..., description="Deposit amount in USD.")
-    range1: Decimal = Field(..., description="Min range value (token1/token0).")
-    range2: Decimal = Field(..., description="Max range value (token1/token0).")
+    full_range: bool = Field(False, description="Quando true, faz alocacao Full Range com split 50/50 em valor USD.")
+    range1: Decimal | None = Field(None, description="Min range value (token1/token0). Obrigatorio quando full_range=false.")
+    range2: Decimal | None = Field(None, description="Max range value (token1/token0). Obrigatorio quando full_range=false.")
 
 
 class AllocationResponse(BaseModel):

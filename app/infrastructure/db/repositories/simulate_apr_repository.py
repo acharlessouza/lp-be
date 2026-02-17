@@ -154,6 +154,7 @@ class SqlSimulateAprRepository(SimulateAprPort):
                     -- timestamp of the snapshot, stored in meta_block_timestamp.
                     date_trunc('hour', to_timestamp(s.meta_block_timestamp) AT TIME ZONE 'UTC') AS hour_ts,
                     s.tick,
+                    s.liquidity,
                     row_number() OVER (
                         PARTITION BY date_trunc('hour', to_timestamp(s.meta_block_timestamp) AT TIME ZONE 'UTC')
                         ORDER BY s.meta_block_number DESC
@@ -162,9 +163,11 @@ class SqlSimulateAprRepository(SimulateAprPort):
                 WHERE lower(s.pool_address) = :pool_address
                   AND s.chain_id = :chain_id
                   AND s.dex_id = :dex_id
-                  AND (to_timestamp(s.meta_block_timestamp) AT TIME ZONE 'UTC') >= (now() - (:hours || ' hours')::interval)
+                  AND (to_timestamp(s.meta_block_timestamp) AT TIME ZONE 'UTC') >= (
+                      (now() AT TIME ZONE 'UTC') - (:hours || ' hours')::interval
+                  )
             )
-            SELECT hour_ts, tick
+            SELECT hour_ts, tick, liquidity
             FROM ranked
             WHERE rn = 1
             ORDER BY hour_ts ASC

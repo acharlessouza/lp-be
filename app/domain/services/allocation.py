@@ -51,3 +51,21 @@ def split_deposit_range(
     amount0 = liquidity * amount0_per_l
     amount1 = liquidity * amount1_per_l
     return AllocationAmounts(amount_token0=amount0, amount_token1=amount1)
+
+
+def split_deposit_full_range_equal_value(
+    *,
+    deposit_usd: Decimal,
+    price_token0_usd: Decimal,
+    price_token1_usd: Decimal,
+) -> AllocationAmounts:
+    if deposit_usd <= 0:
+        raise AllocationInputError("Deposit must be positive.")
+    if price_token0_usd <= 0 or price_token1_usd <= 0:
+        raise AllocationInputError("Token prices must be positive.")
+
+    half_usd = deposit_usd / Decimal("2")
+    return AllocationAmounts(
+        amount_token0=half_usd / price_token0_usd,
+        amount_token1=half_usd / price_token1_usd,
+    )

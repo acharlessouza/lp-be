@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -29,13 +30,16 @@ class AprSimulationResult:
 def simulate_fee_apr(
     *,
     hourly_fees: list[SimulateAprHourly],
-    hourly_ticks: dict,
+    hourly_ticks: dict[datetime, int],
+    hourly_liquidity: dict[datetime, Decimal] | None,
     liquidity_curve: LiquidityCurve,
     l_user: Decimal,
     tick_lower: int,
     tick_upper: int,
+    full_range: bool,
     mode: str,
     fallback_tick: int,
+    latest_pool_liquidity: Decimal | None,
     horizon_hours: int,
     annualization_days: Decimal,
     deposit_usd: Decimal | None,
@@ -63,6 +67,10 @@ def simulate_fee_apr(
     shares_in_range: list[Decimal] = []
     hours_in_range = 0
     missing_tick_warning_added = False
+    missing_liquidity_curve_warning_added = False
+    missing_liquidity_latest_warning_added = False
+    missing_liquidity_zero_warning_added = False
+    liquidity_by_hour = hourly_liquidity or {}
 
     for row in rows:
         tick_h = fallback_tick
@@ -77,9 +85,31 @@ def simulate_fee_apr(
             else:
                 tick_h = tick_candidate
 
-        if tick_lower <= tick_h <= tick_upper:
+        if full_range or (tick_lower <= tick_h <= tick_upper):
             hours_in_range += 1
-            l_pool_active = active_liquidity_at_tick(curve=liquidity_curve, tick=tick_h)
+            snapshot_liquidity = liquidity_by_hour.get(row.hour_ts)
+            if snapshot_liquidity is not None and snapshot_liquidity > 0:
+                l_pool_active = snapshot_liquidity
+            else:
+                l_pool_active = active_liquidity_at_tick(curve=liquidity_curve, tick=tick_h)
+                if l_pool_active <= 0 and latest_pool_liquidity is not None and latest_pool_liquidity > 0:
+                    l_pool_active = latest_pool_liquidity
+                    if not missing_liquidity_latest_warning_added:
+                        current_warnings.append(
+                            "Missing snapshot liquidity for some hours; fell back to latest pool liquidity."
+                        )
+                        missing_liquidity_latest_warning_added = True
+                elif l_pool_active > 0:
+                    if not missing_liquidity_curve_warning_added:
+                        current_warnings.append(
+                            "Missing snapshot liquidity for some hours; fell back to initialized-ticks active liquidity."
+                        )
+                        missing_liquidity_curve_warning_added = True
+                elif not missing_liquidity_zero_warning_added:
+                    current_warnings.append(
+                        "Missing snapshot liquidity for some hours and no fallback liquidity available."
+                    )
+                    missing_liquidity_zero_warning_added = True
             denom = l_pool_active + l_user
             share = (l_user / denom) if denom > 0 and l_user > 0 else Decimal("0")
             shares_in_range.append(share)

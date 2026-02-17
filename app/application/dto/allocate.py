@@ -10,8 +10,9 @@ class AllocateInput:
     chain_id: int
     dex_id: int
     deposit_usd: Decimal
-    range_min: Decimal
-    range_max: Decimal
+    full_range: bool = False
+    range_min: Decimal | None = None
+    range_max: Decimal | None = None
 
 
 @dataclass(frozen=True)

@@ -34,6 +34,7 @@ class SimulateAprHourly:
 class SimulateAprSnapshotHourly:
     hour_ts: datetime
     tick: int | None
+    liquidity: Decimal | None
 
 
 @dataclass(frozen=True)

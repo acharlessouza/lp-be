@@ -49,7 +49,7 @@ def sqrt_price_x96_to_price(
 
 
 def _price_to_tick_value(price: Decimal, token0_decimals: int, token1_decimals: int) -> float:
-    if price <= 0:
+    if price < 0:
         raise ValueError("price must be positive.")
     decimal_adjust = Decimal(10) ** Decimal(token0_decimals - token1_decimals)
     raw_price = price / decimal_adjust

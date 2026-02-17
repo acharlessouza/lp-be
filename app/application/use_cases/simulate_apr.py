@@ -30,6 +30,8 @@ from app.domain.services.univ3_math import (
 
 HORIZON_PATTERN = re.compile(r"^\s*(\d+)\s*([dDhH]?)\s*$")
 CALCULATION_METHODS = {"current", "avg_liquidity_in_range", "peak_liquidity_in_range", "custom"}
+UNISWAP_V3_MIN_TICK = -887272
+UNISWAP_V3_MAX_TICK = 887272
 logger = logging.getLogger(__name__)
 
 
@@ -108,33 +110,41 @@ class SimulateAprUseCase:
             raise SimulationDataNotFoundError("Pool hourly data not found.")
 
         warnings: list[str] = []
-        snapshots_map: dict = {}
-        if mode == "B":
+        snapshots_ticks_map: dict = {}
+        snapshots_liquidity_map: dict = {}
+        if mode == "B" or command.full_range:
             snapshots = self._simulate_apr_port.get_pool_state_snapshots_hourly(
                 pool_address=pool_address,
                 chain_id=command.chain_id,
                 dex_id=command.dex_id,
                 hours=hours_to_fetch,
             )
-            snapshots_map = {
+            snapshots_ticks_map = {
                 row.hour_ts: row.tick
                 for row in snapshots
                 if row.tick is not None
             }
-            if not snapshots_map:
+            snapshots_liquidity_map = {
+                row.hour_ts: row.liquidity
+                for row in snapshots
+                if row.liquidity is not None
+            }
+            if mode == "B" and not snapshots_ticks_map:
                 warnings.append("No hourly snapshots found; mode B fell back to mode A behavior.")
 
-        initialized_ticks = self._simulate_apr_port.get_initialized_ticks(
-            pool_address=pool_address,
-            chain_id=command.chain_id,
-            dex_id=command.dex_id,
-            min_tick=tick_lower,
-            max_tick=tick_upper,
-        )
-        if not initialized_ticks:
-            raise SimulationDataNotFoundError("Initialized ticks not found for pool.")
-
-        liquidity_curve = build_liquidity_curve(initialized_ticks)
+        initialized_ticks: list[SimulateAprInitializedTick] = []
+        liquidity_curve = build_liquidity_curve([])
+        if not command.full_range:
+            initialized_ticks = self._simulate_apr_port.get_initialized_ticks(
+                pool_address=pool_address,
+                chain_id=command.chain_id,
+                dex_id=command.dex_id,
+                min_tick=tick_lower,
+                max_tick=tick_upper,
+            )
+            if not initialized_ticks:
+                raise SimulationDataNotFoundError("Initialized ticks not found for pool.")
+            liquidity_curve = build_liquidity_curve(initialized_ticks)
         calculation_price = self._resolve_calculation_price(
             method=calculation_method,
             custom_price=command.custom_calculation_price,
@@ -193,13 +203,16 @@ class SimulateAprUseCase:
 
         simulation = simulate_fee_apr(
             hourly_fees=hourly_fees,
-            hourly_ticks=snapshots_map,
+            hourly_ticks=snapshots_ticks_map,
+            hourly_liquidity=snapshots_liquidity_map,
             liquidity_curve=liquidity_curve,
             l_user=l_user,
             tick_lower=tick_lower,
             tick_upper=tick_upper,
+            full_range=command.full_range,
             mode=mode,
             fallback_tick=current_tick,
+            latest_pool_liquidity=latest_state.liquidity,
             horizon_hours=horizon_hours,
             annualization_days=annualization_days,
             deposit_usd=deposit_usd,
@@ -214,6 +227,17 @@ class SimulateAprUseCase:
         )
 
     def _resolve_range_ticks(self, *, command: SimulateAprInput, pool: SimulateAprPool) -> tuple[int, int]:
+        if command.full_range:
+            tick_spacing = pool.tick_spacing
+            if tick_spacing is None or tick_spacing <= 0:
+                raise InvalidSimulationInputError("tick_spacing must be available and > 0 for full_range simulation.")
+
+            tick_lower = (UNISWAP_V3_MIN_TICK // tick_spacing) * tick_spacing
+            tick_upper = ((UNISWAP_V3_MAX_TICK + tick_spacing - 1) // tick_spacing) * tick_spacing
+            if tick_lower >= tick_upper:
+                raise InvalidSimulationInputError("Invalid full range ticks computed for this pool.")
+            return tick_lower, tick_upper
+
         if command.tick_lower is not None or command.tick_upper is not None:
             if command.tick_lower is None or command.tick_upper is None:
                 raise InvalidSimulationInputError("tick_lower and tick_upper must be provided together.")

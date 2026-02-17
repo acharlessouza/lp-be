@@ -51,14 +51,17 @@ Entrada:
   "chain_id": 2,
   "dex_id": 1,
   "amount": "1000",
+  "full_range": false,
   "range1": "2500",
   "range2": "3500"
 }
 ```
 
 Notas:
+- `full_range=true` ativa alocacao Full Range e o split e aproximado de 50/50 em valor USD.
+- Com `full_range=true`, `range1` e `range2` sao opcionais.
 - `range1` e `range2` devem ser informados como **preco do token0 em unidades de token1**
-  (ex.: WETH/USDT = 2932.21).
+  (ex.: WETH/USDT = 2932.21) quando `full_range=false`.
 - Implementacao interna segue arquitetura Hexagonal:
   - adapter HTTP em `app/api/routers/allocate.py`
   - use case em `app/application/use_cases/allocate.py`
@@ -316,6 +319,7 @@ Entrada:
   "deposit_usd": "10000",
   "amount_token0": "1.2",
   "amount_token1": "0",
+  "full_range": false,
   "tick_lower": -201000,
   "tick_upper": -195000,
   "min_price": null,
@@ -330,10 +334,13 @@ Entrada:
 
 Notas:
 - A pool e resolvida por `pool_address + chain_id + dex_id`.
+- `full_range=true` habilita simulacao Full Range (Uniswap v3) e nao exige `tick_lower/tick_upper` nem `min_price/max_price`.
 - Informe range por ticks (`tick_lower`/`tick_upper`) ou por preco (`min_price`/`max_price`).
+- Em `full_range=true`, os ticks sao derivados de `MIN_TICK=-887272` e `MAX_TICK=887272`, alinhados por `tick_spacing`.
 - `horizon` e dinamico: aceita valores positivos como `24h`, `7d`, `14d`, `30d` (ou numero sem sufixo, interpretado como dias).
 - `mode=A` usa tick atual constante em todas as horas.
 - `mode=B` usa caminho horario de ticks por snapshots; se faltar snapshot em alguma hora, o calculo cai para tick atual nessa hora e retorna warning.
+- O share horario prioriza `pool_state_snapshots.liquidity` por hora (UTC). Quando faltar, usa fallback controlado.
 - `calculation_method` aceita:
   - `current` (Current Price)
   - `avg_liquidity_in_range` (Average Liquidity In-Range)
