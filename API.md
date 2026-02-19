@@ -3,7 +3,7 @@
 ## Visao geral
 - API em FastAPI para simulacoes de APR em pools de liquidez.
 - Apenas usuarios autenticados podem acessar as rotas.
-- Versionamento por prefixo: `/v1`.
+- Versionamento por prefixo: `/v1` e `/v2` (v2 atualmente disponivel para simulacao de APR exata).
 
 ## Autenticacao
 - JWT via `Authorization: Bearer <token>`.
@@ -35,6 +35,7 @@
 - `GET /v1/pools/{pool_address}/volume-history`.
 - `POST /v1/estimated-fees`.
 - `POST /v1/simulate/apr`.
+- `POST /v2/simulate/apr`.
 - `GET /v1/exchanges`.
 - `GET /v1/exchanges/{exchange_id}/networks`.
 - `GET /v1/exchanges/{exchange_id}/networks/{network_id}/tokens`.
@@ -366,6 +367,65 @@ Resposta:
   "monthly_usd": "370.20",
   "yearly_usd": "4500.00",
   "fee_apr": "0.45"
+}
+```
+
+## POST /v2/simulate/apr
+Entrada:
+```json
+{
+  "pool_address": "0x4e68ccd3e89f51c3074ca5072bbac773960dfa36",
+  "chain_id": 1,
+  "dex_id": 2,
+  "deposit_usd": "10000",
+  "amount_token0": "1.2",
+  "amount_token1": "0",
+  "full_range": false,
+  "tick_lower": -201000,
+  "tick_upper": -195000,
+  "min_price": null,
+  "max_price": null,
+  "horizon": "7d",
+  "lookback_days": 7,
+  "calculation_method": "current",
+  "custom_calculation_price": null,
+  "apr_method": "exact"
+}
+```
+
+Notas:
+- Endpoint v2 usa metodo exato por bloco (Uniswap v3 `feeGrowthInside`), com snapshot mais recente como bloco `B` e snapshot de lookback como bloco `A`.
+- Fonte principal: `public.pool_state_snapshots` para estados A/B e `apr_exact.tick_snapshot` para `fee_growth_outside` nos ticks `lower/upper` em A/B.
+- Quando algum tick obrigatorio (A/B x lower/upper) nao existe em `apr_exact.tick_snapshot`, a API dispara um fluxo on-demand: consulta o subgraph somente para os combos faltantes (maximo configuravel, default 4), faz upsert no banco e reprocessa.
+- Guardrails do on-demand: timeout configuravel, retry com backoff exponencial e rate-limit minimo entre chamadas.
+- Se faltarem snapshots/ticks obrigatorios, retorna erro explicito (`404`) sem fallback silencioso.
+- Implementacao interna segue arquitetura Hexagonal:
+  - adapter HTTP em `app/api/routers/simulate_apr_v2.py`
+  - use case em `app/application/use_cases/simulate_apr_v2.py`
+  - regra de dominio em `app/domain/services/univ3_fee_growth.py`
+  - SQL em `app/infrastructure/db/repositories/simulate_apr_v2_repository.py`
+
+Erros possiveis:
+- `400` quando parametros forem invalidos.
+- `404` quando faltarem dados para simulacao exata (snapshots/ticks/lookback).
+
+Resposta:
+```json
+{
+  "estimated_fees_period_usd": "0.84",
+  "estimated_fees_24h_usd": "1.10",
+  "monthly_usd": "33.45",
+  "yearly_usd": "401.40",
+  "fee_apr": "0.0401",
+  "meta": {
+    "block_a_number": 22001111,
+    "block_b_number": 22011111,
+    "ts_a": 1739664000,
+    "ts_b": 1740268800,
+    "seconds_delta": 604800,
+    "used_price": "3021.11",
+    "warnings": []
+  }
 }
 ```
 

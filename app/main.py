@@ -12,6 +12,7 @@ from .api.routers.match_ticks import router as match_ticks_router
 from .api.routers.pool_price import router as pool_price_router
 from .api.routers.pool_volume_history import router as pool_volume_history_router
 from .api.routers.simulate_apr import router as simulate_apr_router
+from .api.routers.simulate_apr_v2 import router as simulate_apr_v2_router
 
 app = FastAPI(title="LP API")
 app.add_middleware(
@@ -30,3 +31,4 @@ app.include_router(match_ticks_router)
 app.include_router(estimated_fees_router)
 app.include_router(discover_pools_router)
 app.include_router(simulate_apr_router)
+app.include_router(simulate_apr_v2_router)

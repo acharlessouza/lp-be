@@ -24,7 +24,12 @@ from app.application.use_cases.list_exchange_networks import ListExchangeNetwork
 from app.application.use_cases.list_exchanges import ListExchangesUseCase
 from app.application.use_cases.match_ticks import MatchTicksUseCase
 from app.application.use_cases.simulate_apr import SimulateAprUseCase
+from app.application.use_cases.simulate_apr_v2 import SimulateAprV2UseCase
 from app.infrastructure.clients.allocation_price_provider import PriceServiceAdapter
+from app.infrastructure.clients.univ3_subgraph_client import (
+    Univ3SubgraphClient,
+    Univ3SubgraphClientSettings,
+)
 from app.infrastructure.clients.pricing import CoingeckoPriceProvider, PriceOverrides, PriceService
 from app.infrastructure.db.engine import get_engine
 from app.infrastructure.db.repositories.allocation_pool_repository import (
@@ -42,6 +47,10 @@ from app.infrastructure.db.repositories.pool_volume_history_repository import (
     SqlPoolVolumeHistoryRepository,
 )
 from app.infrastructure.db.repositories.simulate_apr_repository import SqlSimulateAprRepository
+from app.infrastructure.db.repositories.simulate_apr_v2_repository import SqlSimulateAprV2Repository
+from app.infrastructure.db.repositories.tick_snapshot_on_demand_repository import (
+    SqlTickSnapshotOnDemandRepository,
+)
 from app.shared.config import get_settings
 
 
@@ -62,6 +71,22 @@ def _get_price_service() -> PriceService:
         cache_ttl_seconds=settings.coingecko_cache_ttl_seconds,
     )
     return PriceService(overrides=overrides, coingecko=coingecko)
+
+
+@lru_cache(maxsize=1)
+def _get_univ3_subgraph_client() -> Univ3SubgraphClient:
+    settings = get_settings()
+    return Univ3SubgraphClient(
+        Univ3SubgraphClientSettings(
+            graph_gateway_base=settings.graph_gateway_base,
+            graph_api_key=settings.graph_api_key,
+            graph_subgraph_ids=settings.graph_subgraph_ids,
+            graph_blocks_subgraph_ids=settings.graph_blocks_subgraph_ids,
+            timeout_seconds=settings.graph_on_demand_timeout_seconds,
+            max_retries=settings.graph_on_demand_max_retries,
+            min_interval_ms=settings.graph_on_demand_min_interval_ms,
+        )
+    )
 
 
 def get_allocate_use_case() -> AllocateUseCase:
@@ -136,6 +161,19 @@ def get_discover_pools_use_case() -> DiscoverPoolsUseCase:
 
 def get_simulate_apr_use_case() -> SimulateAprUseCase:
     return SimulateAprUseCase(simulate_apr_port=SqlSimulateAprRepository(_get_db_engine()))
+
+
+def get_simulate_apr_v2_use_case() -> SimulateAprV2UseCase:
+    settings = get_settings()
+    db_engine = _get_db_engine()
+    return SimulateAprV2UseCase(
+        simulate_apr_v2_port=SqlSimulateAprV2Repository(db_engine),
+        tick_snapshot_on_demand_port=SqlTickSnapshotOnDemandRepository(
+            db_engine,
+            subgraph_client=_get_univ3_subgraph_client(),
+        ),
+        max_on_demand_combinations=settings.graph_on_demand_max_combinations,
+    )
 
 
 def get_pool_volume_history_use_case() -> GetPoolVolumeHistoryUseCase:
