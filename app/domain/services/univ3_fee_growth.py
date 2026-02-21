@@ -4,6 +4,15 @@ from decimal import Decimal
 
 
 Q128 = 2**128
+UINT256_MOD = 2**256
+
+
+def sub_uint256(a: int, b: int) -> int:
+    return (a - b) % UINT256_MOD
+
+
+def delta_uint256(new_value: int, old_value: int) -> int:
+    return (new_value - old_value) % UINT256_MOD
 
 
 def parse_uint256(value: int | str | Decimal | None) -> int:
@@ -40,17 +49,17 @@ def fee_growth_inside(
     fee_growth_below = (
         fee_growth_outside_lower
         if tick_current >= tick_lower
-        else fee_growth_global - fee_growth_outside_lower
+        else sub_uint256(fee_growth_global, fee_growth_outside_lower)
     )
     fee_growth_above = (
         fee_growth_outside_upper
         if tick_current < tick_upper
-        else fee_growth_global - fee_growth_outside_upper
+        else sub_uint256(fee_growth_global, fee_growth_outside_upper)
     )
-    inside = fee_growth_global - fee_growth_below - fee_growth_above
-    if inside < 0:
-        raise ValueError("feeGrowthInside is negative.")
-    return inside
+    return sub_uint256(
+        sub_uint256(fee_growth_global, fee_growth_below),
+        fee_growth_above,
+    )
 
 
 def fees_from_delta_inside(*, delta_inside: int, user_liquidity: Decimal) -> Decimal:

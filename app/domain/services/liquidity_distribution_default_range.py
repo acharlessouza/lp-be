@@ -54,8 +54,6 @@ def calculate_preset_range(
         max_tick = current_tick_aligned + (3 * tick_spacing)
     elif preset == "wide":
         ref_price = float(current_price)
-        if swapped_pair:
-            ref_price = 1.0 / ref_price
 
         min_price_target = ref_price * 0.5
         max_price_target = ref_price * 2.0

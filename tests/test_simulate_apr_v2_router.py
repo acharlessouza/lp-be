@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from app.api.auth import require_jwt
 from app.api.deps import get_simulate_apr_v2_use_case
 from app.application.dto.simulate_apr_v2 import SimulateAprV2MetaOutput, SimulateAprV2Output
+from app.domain.exceptions import SimulationDataNotFoundError
 from app.main import app
 
 
@@ -27,6 +28,21 @@ class FakeSimulateAprV2UseCase:
                 used_price=Decimal("2"),
                 warnings=["warn"],
             ),
+        )
+
+
+class FakeSimulateAprV2UseCaseDataNotFound:
+    def execute(self, _command):
+        raise SimulationDataNotFoundError(
+            "Nao foi possivel realizar a simulacao com os dados disponiveis.",
+            code="initialized_ticks_not_found",
+            context={
+                "pool_address": "0xpool",
+                "chain_id": 1,
+                "dex_id": 2,
+                "tick_lower": -200700,
+                "tick_upper": -200340,
+            },
         )
 
 
@@ -54,6 +70,7 @@ def test_router_v2_returns_response_with_meta():
             "calculation_method": "current",
             "custom_calculation_price": None,
             "apr_method": "exact",
+            "swapped_pair": True,
         },
     )
 
@@ -62,5 +79,43 @@ def test_router_v2_returns_response_with_meta():
     assert payload["estimated_fees_period_usd"] == "1.23"
     assert payload["meta"]["block_a_number"] == 10
     assert payload["meta"]["used_price"] == "2"
+
+    app.dependency_overrides.clear()
+
+
+def test_router_v2_returns_422_with_code_and_context_for_data_not_found():
+    app.dependency_overrides[require_jwt] = lambda: "token"
+    app.dependency_overrides[get_simulate_apr_v2_use_case] = lambda: FakeSimulateAprV2UseCaseDataNotFound()
+
+    client = TestClient(app)
+    response = client.post(
+        "/v2/simulate/apr",
+        json={
+            "pool_address": "0xpool",
+            "chain_id": 1,
+            "dex_id": 2,
+            "deposit_usd": "1000",
+            "amount_token0": "1",
+            "amount_token1": "1",
+            "full_range": False,
+            "tick_lower": -10,
+            "tick_upper": 10,
+            "min_price": None,
+            "max_price": None,
+            "horizon": "24h",
+            "lookback_days": 1,
+            "calculation_method": "current",
+            "custom_calculation_price": None,
+            "apr_method": "exact",
+            "swapped_pair": False,
+        },
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    detail = payload["detail"]
+    assert detail["message"] == "Nao foi possivel realizar a simulacao com os dados disponiveis."
+    assert detail["code"] == "initialized_ticks_not_found"
+    assert detail["context"]["pool_address"] == "0xpool"
 
     app.dependency_overrides.clear()

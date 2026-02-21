@@ -4,6 +4,7 @@ from typing import Protocol
 
 from app.application.dto.tick_snapshot_on_demand import (
     BlockUpsertRow,
+    InitializedTickSourceRow,
     MissingTickSnapshot,
     TickSnapshotUpsertRow,
 )
@@ -43,4 +44,25 @@ class TickSnapshotOnDemandPort(Protocol):
         ...
 
     def upsert_blocks(self, *, rows: list[BlockUpsertRow]) -> int:
+        ...
+
+    def fetch_initialized_ticks(
+        self,
+        *,
+        pool_address: str,
+        chain_id: int,
+        dex_id: int,
+        min_tick: int,
+        max_tick: int,
+    ) -> list[InitializedTickSourceRow]:
+        ...
+
+    def upsert_initialized_ticks(
+        self,
+        *,
+        pool_address: str,
+        chain_id: int,
+        dex_id: int,
+        rows: list[InitializedTickSourceRow],
+    ) -> int:
         ...

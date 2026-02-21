@@ -54,7 +54,8 @@ Entrada:
   "amount": "1000",
   "full_range": false,
   "range1": "2500",
-  "range2": "3500"
+  "range2": "3500",
+  "swapped_pair": false
 }
 ```
 
@@ -63,6 +64,11 @@ Notas:
 - Com `full_range=true`, `range1` e `range2` sao opcionais.
 - `range1` e `range2` devem ser informados como **preco do token0 em unidades de token1**
   (ex.: WETH/USDT = 2932.21) quando `full_range=false`.
+- Quando `swapped_pair=true`, `range1/range2` sao interpretados no referencial invertido (UI) e convertidos para canonical no backend.
+- Quando `swapped_pair=true`, a resposta ja volta no referencial da UI:
+  - `amount_token0` e `amount_token1` sao trocados
+  - `token0_*` e `token1_*` sao trocados
+  - `price_token0_usd` e `price_token1_usd` sao trocados
 - Implementacao interna segue arquitetura Hexagonal:
   - adapter HTTP em `app/api/routers/allocate.py`
   - use case em `app/application/use_cases/allocate.py`
@@ -98,7 +104,8 @@ Entrada:
   "center_tick": -198000,
   "tick_range": 6000,
   "range_min": 2833.5,
-  "range_max": 3242.4
+  "range_max": 3242.4,
+  "swapped_pair": false
 }
 ```
 
@@ -110,6 +117,12 @@ Notas:
 - O endpoint usa o ultimo `snapshot_at` disponivel em `public.pool_state_snapshots`.
 - Quando `center_tick` nao e informado, o `current_tick` vem de `public.pool_state_snapshots.tick` (fallback: `public.pools.tick`).
 - `snapshot_date` e ignorado neste fluxo.
+- `range_min/range_max` sao aceitos por compatibilidade com o frontend (ex.: barras verticais de faixa), mas nao recortam os pontos retornados.
+- Quando `swapped_pair=true`:
+  - `center_tick` (quando enviado) e convertido para canonical antes do calculo
+  - cada ponto da resposta e devolvido como `tick=-tick` e `price=1/price`
+  - `current_tick` e invertido
+  - `pool.token0/token1` sao invertidos para casar com a UI
 - A liquidez plotada e a soma acumulada de `liquidity_net` (`public.pool_ticks_initialized`) ancorada na liquidez onchain (`public.pool_state_snapshots.liquidity`, fallback `public.pools.liquidity`).
 - Implementacao interna segue arquitetura Hexagonal:
   - adapter HTTP em `app/api/routers/liquidity_distribution.py`
@@ -158,7 +171,12 @@ Notas:
 - `initial_price` e opcional. Se nao for enviado, a API tenta derivar de `pools.price_token0_per_token1` e, como fallback, do tick atual.
 - `center_tick` e opcional. Se enviado, substitui o tick atual da pool para o calculo.
 - `tick_spacing` e obtido automaticamente da pool; fallback por `fee_tier` (100->1, 500->10, 3000->60, 10000->200).
-- Quando `swapped_pair=true`, os precos retornados sao invertidos (`1/price`) e ordenados.
+- Quando `swapped_pair=true`:
+  - `initial_price` (quando enviado) e interpretado no referencial da UI e convertido para canonical
+  - `center_tick` (quando enviado) e convertido para canonical
+  - `min_price/max_price` sao devolvidos invertidos para UI (`1/max`, `1/min`)
+  - `min_tick/max_tick` sao devolvidos como `-max_tick` e `-min_tick`
+  - `tick_spacing` nao muda
 - Implementacao interna segue arquitetura Hexagonal:
   - adapter HTTP em `app/api/routers/liquidity_distribution.py`
   - use case em `app/application/use_cases/get_liquidity_distribution_default_range.py`
@@ -186,6 +204,7 @@ Query params:
 - `chain_id` (int)
 - `dex_id` (int)
 - `days` (int, > 0) ou `start` + `end` (ISO timestamp)
+- `swapped_pair` (bool, default `false`)
 
 Exemplo:
 `/v1/pool-price?pool_address=0x...&chain_id=2&dex_id=1&days=30`
@@ -195,6 +214,7 @@ Exemplo (pan):
 
 Notas:
 - O `price` atual usa o ultimo snapshot de `pool_state_snapshots` (fallback em `pools.price_token0_per_token1` / `pools.sqrt_price_x96`).
+- Quando `swapped_pair=true`, o backend inverte a serie (`price = 1/price`) e recalcula `min/max/avg` com base na serie invertida (quando houver serie no periodo).
 - Implementacao interna segue arquitetura Hexagonal:
   - adapter HTTP em `app/api/routers/pool_price.py`
   - use case em `app/application/use_cases/get_pool_price.py`
@@ -389,16 +409,25 @@ Entrada:
   "lookback_days": 7,
   "calculation_method": "current",
   "custom_calculation_price": null,
-  "apr_method": "exact"
+  "apr_method": "exact",
+  "swapped_pair": false
 }
 ```
 
 Notas:
 - Endpoint v2 usa metodo exato por bloco (Uniswap v3 `feeGrowthInside`), com snapshot mais recente como bloco `B` e snapshot de lookback como bloco `A`.
+- O range pode ser enviado por:
+  - ticks (`tick_lower`/`tick_upper`), ou
+  - precos (`min_price`/`max_price`) sem ticks.
 - Fonte principal: `public.pool_state_snapshots` para estados A/B e `apr_exact.tick_snapshot` para `fee_growth_outside` nos ticks `lower/upper` em A/B.
 - Quando algum tick obrigatorio (A/B x lower/upper) nao existe em `apr_exact.tick_snapshot`, a API dispara um fluxo on-demand: consulta o subgraph somente para os combos faltantes (maximo configuravel, default 4), faz upsert no banco e reprocessa.
 - Guardrails do on-demand: timeout configuravel, retry com backoff exponencial e rate-limit minimo entre chamadas.
-- Se faltarem snapshots/ticks obrigatorios, retorna erro explicito (`404`) sem fallback silencioso.
+- Se faltarem snapshots/ticks obrigatorios ou o range for inviavel para simulacao, retorna erro explicito (`422`) com codigo e contexto de diagnostico.
+- Quando `swapped_pair=true`:
+  - ticks de entrada sao convertidos para canonical (`tick_lower=-tick_upper_ui`, `tick_upper=-tick_lower_ui`)
+  - preco de entrada (`min_price/max_price` e `custom_calculation_price`) e convertido para canonical (`1/max`, `1/min`, `1/custom`)
+  - `amount_token0/amount_token1` sao trocados antes do calculo
+  - `meta.used_price` e devolvido no referencial da UI (`1/used_price_canonical`)
 - Implementacao interna segue arquitetura Hexagonal:
   - adapter HTTP em `app/api/routers/simulate_apr_v2.py`
   - use case em `app/application/use_cases/simulate_apr_v2.py`
@@ -407,7 +436,26 @@ Notas:
 
 Erros possiveis:
 - `400` quando parametros forem invalidos.
-- `404` quando faltarem dados para simulacao exata (snapshots/ticks/lookback).
+- `422` quando faltarem dados para simulacao exata (snapshots/ticks/lookback) ou o range nao for simulavel.
+
+Exemplo de erro (`422`):
+```json
+{
+  "detail": {
+    "message": "Nao foi possivel realizar a simulacao com os dados disponiveis.",
+    "code": "initialized_ticks_not_found",
+    "context": {
+      "pool_address": "0x...",
+      "chain_id": 1,
+      "dex_id": 2,
+      "tick_lower": -200700,
+      "tick_upper": -200340,
+      "swapped_pair_input": true,
+      "canonicalized": true
+    }
+  }
+}
+```
 
 Resposta:
 ```json
@@ -514,11 +562,13 @@ Entrada:
 {
   "pool_id": 572,
   "min_price": 2833.5,
-  "max_price": 3242.4
+  "max_price": 3242.4,
+  "swapped_pair": false
 }
 ```
 
 Notas:
+- Quando `swapped_pair=true`, o backend converte `min_price/max_price` da UI para canonical, faz o match em canonical e devolve `min/max/current` novamente no referencial da UI.
 - Implementacao interna segue arquitetura Hexagonal:
   - adapter HTTP em `app/api/routers/match_ticks.py`
   - use case em `app/application/use_cases/match_ticks.py`

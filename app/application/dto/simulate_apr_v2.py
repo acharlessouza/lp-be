@@ -22,6 +22,7 @@ class SimulateAprV2Input:
     calculation_method: str
     custom_calculation_price: Decimal | None
     apr_method: str
+    swapped_pair: bool = False
 
 
 @dataclass(frozen=True)

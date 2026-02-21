@@ -13,6 +13,7 @@ class AllocateInput:
     full_range: bool = False
     range_min: Decimal | None = None
     range_max: Decimal | None = None
+    swapped_pair: bool = False
 
 
 @dataclass(frozen=True)

@@ -11,6 +11,7 @@ from app.application.use_cases.liquidity_distribution_pool_resolver import (
     resolve_liquidity_distribution_pool,
 )
 from app.domain.exceptions import LiquidityDistributionInputError, LiquidityDistributionNotFoundError
+from app.domain.services.pair_orientation import canonical_ticks_to_ui, invert_decimal_price
 from app.domain.services.liquidity_distribution_default_range import (
     calculate_preset_range,
     tick_to_price,
@@ -56,8 +57,15 @@ class GetLiquidityDistributionDefaultRangeUseCase:
             current_tick = pool.pool_tick if pool.pool_tick is not None else pool.current_tick
         if current_tick is None:
             raise LiquidityDistributionNotFoundError("Pool current tick not found.")
+        if command.swapped_pair and command.center_tick is not None:
+            current_tick = -current_tick
 
         current_price: Decimal | None = command.initial_price
+        if current_price is not None and command.swapped_pair:
+            try:
+                current_price = invert_decimal_price(current_price, field_name="initial_price")
+            except ValueError as exc:
+                raise LiquidityDistributionInputError(str(exc)) from exc
         if current_price is None:
             if (
                 pool.current_price_token1_per_token0 is not None
@@ -89,6 +97,12 @@ class GetLiquidityDistributionDefaultRangeUseCase:
             )
         except ValueError as exc:
             raise LiquidityDistributionInputError(str(exc)) from exc
+
+        if command.swapped_pair:
+            try:
+                min_tick, max_tick = canonical_ticks_to_ui(min_tick, max_tick)
+            except ValueError as exc:
+                raise LiquidityDistributionInputError(str(exc)) from exc
 
         return GetLiquidityDistributionDefaultRangeOutput(
             min_price=min_price,

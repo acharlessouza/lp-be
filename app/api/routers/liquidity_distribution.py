@@ -50,6 +50,9 @@ def get_liquidity_distribution(
                 current_tick=req.current_tick,
                 center_tick=req.center_tick,
                 tick_range=req.tick_range,
+                range_min=req.range_min,
+                range_max=req.range_max,
+                swapped_pair=req.swapped_pair,
             )
         )
     except PoolNotFoundError as exc:

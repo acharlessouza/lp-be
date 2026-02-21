@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from math import ceil
+from decimal import Decimal
 
 from app.application.dto.pool_price import GetPoolPriceInput, GetPoolPriceOutput
 from app.application.ports.pool_price_port import PoolPricePort
+from app.domain.entities.pool_price import PoolPricePoint
 from app.domain.exceptions import PoolNotFoundError, PoolPriceInputError, PoolPriceNotFoundError
 from app.domain.services.pool_price import resolve_current_pool_price
+from app.domain.services.pair_orientation import invert_decimal_price
 
 
 class GetPoolPriceUseCase:
@@ -89,12 +92,54 @@ class GetPoolPriceUseCase:
                 raise PoolPriceNotFoundError(detail) from exc
             raise PoolPriceInputError(detail) from exc
 
+        min_price = stats.min_price
+        max_price = stats.max_price
+        avg_price = stats.avg_price
+
+        if command.swapped_pair:
+            try:
+                current_price = invert_decimal_price(current_price, field_name="price")
+                series = [
+                    PoolPricePoint(
+                        timestamp=row.timestamp,
+                        price=invert_decimal_price(row.price, field_name="series.price"),
+                    )
+                    for row in series
+                ]
+            except ValueError as exc:
+                raise PoolPriceInputError(str(exc)) from exc
+
+            if series:
+                prices = [row.price for row in series]
+                min_price = min(prices)
+                max_price = max(prices)
+                avg_price = sum(prices, Decimal("0")) / Decimal(len(prices))
+            else:
+                try:
+                    min_price = (
+                        invert_decimal_price(stats.max_price, field_name="stats.max")
+                        if stats.max_price is not None
+                        else None
+                    )
+                    max_price = (
+                        invert_decimal_price(stats.min_price, field_name="stats.min")
+                        if stats.min_price is not None
+                        else None
+                    )
+                    avg_price = (
+                        invert_decimal_price(stats.avg_price, field_name="stats.avg")
+                        if stats.avg_price is not None
+                        else None
+                    )
+                except ValueError as exc:
+                    raise PoolPriceInputError(str(exc)) from exc
+
         return GetPoolPriceOutput(
             pool_address=command.pool_address,
             days=days_value,
-            min_price=stats.min_price,
-            max_price=stats.max_price,
-            avg_price=stats.avg_price,
+            min_price=min_price,
+            max_price=max_price,
+            avg_price=avg_price,
             current_price=current_price,
             series=series,
         )

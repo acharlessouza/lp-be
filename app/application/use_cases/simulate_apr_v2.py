@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextvars import ContextVar
 import logging
 import re
 from decimal import Decimal
@@ -11,7 +12,7 @@ from app.application.dto.simulate_apr_v2 import (
     SimulateAprV2MetaOutput,
     SimulateAprV2Output,
 )
-from app.application.dto.tick_snapshot_on_demand import MissingTickSnapshot
+from app.application.dto.tick_snapshot_on_demand import InitializedTickSourceRow, MissingTickSnapshot
 from app.application.ports.simulate_apr_v2_port import SimulateAprV2Port
 from app.application.ports.tick_snapshot_on_demand_port import TickSnapshotOnDemandPort
 from app.domain.entities.simulate_apr import SimulateAprInitializedTick
@@ -32,6 +33,7 @@ from app.domain.services.liquidity import (
     position_liquidity_v3,
 )
 from app.domain.services.univ3_fee_growth import (
+    delta_uint256,
     fee_growth_inside,
     fees_from_delta_inside,
     parse_uint256,
@@ -44,6 +46,12 @@ from app.domain.services.univ3_math import (
     tick_to_price,
     tick_to_sqrt_price,
 )
+from app.domain.services.pair_orientation import (
+    invert_decimal_price,
+    swap_optional_amounts,
+    ui_price_range_to_canonical,
+    ui_ticks_to_canonical,
+)
 
 
 HORIZON_PATTERN = re.compile(r"^\s*(\d+)\s*([dDhH]?)\s*$")
@@ -52,7 +60,12 @@ UNISWAP_V3_MIN_TICK = -887272
 UNISWAP_V3_MAX_TICK = 887272
 DATA_NOT_FOUND_MESSAGE = "Nao foi possivel realizar a simulacao com os dados disponiveis."
 SECONDS_PER_DAY = 86400
+INITIALIZED_TICKS_MARGIN = 10_000
 logger = logging.getLogger(__name__)
+_DATA_NOT_FOUND_BASE_CONTEXT: ContextVar[dict[str, object]] = ContextVar(
+    "simulate_apr_v2_data_not_found_base_context",
+    default={},
+)
 
 
 class SimulateAprV2UseCase:
@@ -68,233 +81,331 @@ class SimulateAprV2UseCase:
         self._max_on_demand_combinations = max(1, max_on_demand_combinations)
 
     def execute(self, command: SimulateAprV2Input) -> SimulateAprV2Output:
+        canonical_command = self._to_canonical_command(command)
+        base_context = {
+            "swapped_pair_input": bool(command.swapped_pair),
+            "canonicalized": bool(command.swapped_pair),
+            "input_has_ticks": command.tick_lower is not None or command.tick_upper is not None,
+            "input_has_price_range": command.min_price is not None or command.max_price is not None,
+            "canonical_has_ticks": canonical_command.tick_lower is not None or canonical_command.tick_upper is not None,
+            "canonical_has_price_range": (
+                canonical_command.min_price is not None or canonical_command.max_price is not None
+            ),
+        }
+        base_context_token = _DATA_NOT_FOUND_BASE_CONTEXT.set(base_context)
         logger.info(
-            "simulate_apr_v2: start pool=%s chain_id=%s dex_id=%s lookback_days=%s full_range=%s method=%s apr_method=%s",
-            command.pool_address,
-            command.chain_id,
-            command.dex_id,
-            command.lookback_days,
-            command.full_range,
-            command.calculation_method,
-            command.apr_method,
+            "simulate_apr_v2: start pool=%s chain_id=%s dex_id=%s lookback_days=%s full_range=%s method=%s apr_method=%s swapped_pair=%s",
+            canonical_command.pool_address,
+            canonical_command.chain_id,
+            canonical_command.dex_id,
+            canonical_command.lookback_days,
+            canonical_command.full_range,
+            canonical_command.calculation_method,
+            canonical_command.apr_method,
+            command.swapped_pair,
         )
-        if not command.pool_address or not command.pool_address.lower().startswith("0x"):
-            raise InvalidSimulationInputError("pool_address must start with 0x.")
-        if command.chain_id <= 0 or command.dex_id <= 0:
-            raise InvalidSimulationInputError("chain_id and dex_id must be positive integers.")
-        if command.lookback_days <= 0:
-            raise InvalidSimulationInputError("lookback_days must be > 0.")
+        try:
+            if not canonical_command.pool_address or not canonical_command.pool_address.lower().startswith("0x"):
+                raise InvalidSimulationInputError("pool_address must start with 0x.")
+            if canonical_command.chain_id <= 0 or canonical_command.dex_id <= 0:
+                raise InvalidSimulationInputError("chain_id and dex_id must be positive integers.")
+            if canonical_command.lookback_days <= 0:
+                raise InvalidSimulationInputError("lookback_days must be > 0.")
 
-        self._parse_horizon(command.horizon)
+            self._parse_horizon(canonical_command.horizon)
 
-        apr_method = command.apr_method.strip().lower()
-        if apr_method != "exact":
-            raise InvalidSimulationInputError("apr_method must be exact.")
+            apr_method = canonical_command.apr_method.strip().lower()
+            if apr_method != "exact":
+                raise InvalidSimulationInputError("apr_method must be exact.")
 
-        calculation_method = command.calculation_method.strip().lower()
-        if calculation_method not in CALCULATION_METHODS:
-            raise InvalidSimulationInputError(
-                "calculation_method must be one of: current, avg_liquidity_in_range, peak_liquidity_in_range, custom."
-            )
-        if calculation_method == "custom":
-            if command.custom_calculation_price is None or command.custom_calculation_price <= 0:
+            calculation_method = canonical_command.calculation_method.strip().lower()
+            if calculation_method not in CALCULATION_METHODS:
                 raise InvalidSimulationInputError(
-                    "custom_calculation_price must be provided and > 0 when calculation_method=custom."
+                    "calculation_method must be one of: current, avg_liquidity_in_range, peak_liquidity_in_range, custom."
+                )
+            if calculation_method == "custom":
+                if (
+                    canonical_command.custom_calculation_price is None
+                    or canonical_command.custom_calculation_price <= 0
+                ):
+                    raise InvalidSimulationInputError(
+                        "custom_calculation_price must be provided and > 0 when calculation_method=custom."
+                    )
+
+            if (
+                canonical_command.deposit_usd is None
+                and canonical_command.amount_token0 is None
+                and canonical_command.amount_token1 is None
+            ):
+                raise InvalidSimulationInputError(
+                    "Provide deposit_usd or at least one token amount (amount_token0/amount_token1)."
+                )
+            if canonical_command.deposit_usd is not None and canonical_command.deposit_usd <= 0:
+                raise InvalidSimulationInputError("deposit_usd must be positive.")
+
+            amount_token0 = (
+                canonical_command.amount_token0 if canonical_command.amount_token0 is not None else Decimal("0")
+            )
+            amount_token1 = (
+                canonical_command.amount_token1 if canonical_command.amount_token1 is not None else Decimal("0")
+            )
+            if amount_token0 < 0 or amount_token1 < 0:
+                raise InvalidSimulationInputError("amount_token0 and amount_token1 must be >= 0.")
+
+            pool_address = canonical_command.pool_address.lower()
+            pool = self._simulate_apr_v2_port.get_pool(
+                pool_address=pool_address,
+                chain_id=canonical_command.chain_id,
+                dex_id=canonical_command.dex_id,
+            )
+            if pool is None:
+                raise PoolNotFoundError("Pool not found.")
+
+            tick_lower, tick_upper = self._resolve_range_ticks(command=canonical_command, pool=pool)
+
+            snapshot_b = self._simulate_apr_v2_port.get_latest_pool_snapshot(
+                pool_address=pool_address,
+                chain_id=canonical_command.chain_id,
+                dex_id=canonical_command.dex_id,
+            )
+            if snapshot_b is None:
+                self._raise_data_not_found(
+                    "latest_pool_snapshot_not_found",
+                    pool_address=pool_address,
+                    chain_id=canonical_command.chain_id,
+                    dex_id=canonical_command.dex_id,
                 )
 
-        if command.deposit_usd is None and command.amount_token0 is None and command.amount_token1 is None:
-            raise InvalidSimulationInputError(
-                "Provide deposit_usd or at least one token amount (amount_token0/amount_token1)."
-            )
-        if command.deposit_usd is not None and command.deposit_usd <= 0:
-            raise InvalidSimulationInputError("deposit_usd must be positive.")
-
-        amount_token0 = command.amount_token0 if command.amount_token0 is not None else Decimal("0")
-        amount_token1 = command.amount_token1 if command.amount_token1 is not None else Decimal("0")
-        if amount_token0 < 0 or amount_token1 < 0:
-            raise InvalidSimulationInputError("amount_token0 and amount_token1 must be >= 0.")
-
-        pool_address = command.pool_address.lower()
-        pool = self._simulate_apr_v2_port.get_pool(
-            pool_address=pool_address,
-            chain_id=command.chain_id,
-            dex_id=command.dex_id,
-        )
-        if pool is None:
-            raise PoolNotFoundError("Pool not found.")
-
-        tick_lower, tick_upper = self._resolve_range_ticks(command=command, pool=pool)
-
-        snapshot_b = self._simulate_apr_v2_port.get_latest_pool_snapshot(
-            pool_address=pool_address,
-            chain_id=command.chain_id,
-            dex_id=command.dex_id,
-        )
-        if snapshot_b is None:
-            self._raise_data_not_found(
-                "latest_pool_snapshot_not_found",
+            target_ts = snapshot_b.block_timestamp - (canonical_command.lookback_days * SECONDS_PER_DAY)
+            snapshot_a = self._simulate_apr_v2_port.get_lookback_pool_snapshot(
                 pool_address=pool_address,
-                chain_id=command.chain_id,
-                dex_id=command.dex_id,
-            )
-
-        target_ts = snapshot_b.block_timestamp - (command.lookback_days * SECONDS_PER_DAY)
-        snapshot_a = self._simulate_apr_v2_port.get_lookback_pool_snapshot(
-            pool_address=pool_address,
-            chain_id=command.chain_id,
-            dex_id=command.dex_id,
-            target_timestamp=target_ts,
-        )
-        if snapshot_a is None:
-            self._raise_data_not_found(
-                "lookback_pool_snapshot_not_found",
-                pool_address=pool_address,
-                chain_id=command.chain_id,
-                dex_id=command.dex_id,
+                chain_id=canonical_command.chain_id,
+                dex_id=canonical_command.dex_id,
                 target_timestamp=target_ts,
-                block_b=snapshot_b.block_number,
-                ts_b=snapshot_b.block_timestamp,
+            )
+            if snapshot_a is None:
+                self._raise_data_not_found(
+                    "lookback_pool_snapshot_not_found",
+                    pool_address=pool_address,
+                    chain_id=canonical_command.chain_id,
+                    dex_id=canonical_command.dex_id,
+                    target_timestamp=target_ts,
+                    block_b=snapshot_b.block_number,
+                    ts_b=snapshot_b.block_timestamp,
+                )
+
+            if snapshot_a.tick is None or snapshot_b.tick is None:
+                self._raise_data_not_found(
+                    "snapshot_tick_missing",
+                    block_a=snapshot_a.block_number,
+                    block_b=snapshot_b.block_number,
+                    tick_a=snapshot_a.tick,
+                    tick_b=snapshot_b.tick,
+                )
+
+            seconds_delta = snapshot_b.block_timestamp - snapshot_a.block_timestamp
+            if seconds_delta <= 0:
+                self._raise_data_not_found(
+                    "invalid_seconds_delta",
+                    block_a=snapshot_a.block_number,
+                    ts_a=snapshot_a.block_timestamp,
+                    block_b=snapshot_b.block_number,
+                    ts_b=snapshot_b.block_timestamp,
+                    seconds_delta=seconds_delta,
+                )
+
+            tick_lower, tick_upper = self._resolve_exact_boundary_ticks(
+                command=canonical_command,
+                pool=pool,
+                pool_address=pool_address,
+                chain_id=canonical_command.chain_id,
+                dex_id=canonical_command.dex_id,
+                block_numbers=[snapshot_a.block_number, snapshot_b.block_number],
+                tick_lower=tick_lower,
+                tick_upper=tick_upper,
             )
 
-        if snapshot_a.tick is None or snapshot_b.tick is None:
-            self._raise_data_not_found(
-                "snapshot_tick_missing",
-                block_a=snapshot_a.block_number,
-                block_b=snapshot_b.block_number,
-                tick_a=snapshot_a.tick,
-                tick_b=snapshot_b.tick,
+            warnings: list[str] = []
+            calculation_price = self._resolve_calculation_price(
+                command=canonical_command,
+                pool=pool,
+                snapshot_b=snapshot_b,
+                tick_lower=tick_lower,
+                tick_upper=tick_upper,
+            )
+            if calculation_price <= 0:
+                raise InvalidSimulationInputError("calculation_price must be positive.")
+
+            if (
+                canonical_command.deposit_usd is not None
+                and canonical_command.deposit_usd > 0
+                and amount_token0 == 0
+                and amount_token1 == 0
+            ):
+                usd_half = canonical_command.deposit_usd / Decimal("2")
+                amount_token0 = usd_half / calculation_price
+                amount_token1 = usd_half
+                warnings.append("Derived token amounts from deposit_usd using calculation price (50/50 split).")
+
+            tick_snapshots = self._simulate_apr_v2_port.get_tick_snapshots_for_blocks(
+                pool_address=pool_address,
+                chain_id=canonical_command.chain_id,
+                dex_id=canonical_command.dex_id,
+                block_numbers=[snapshot_a.block_number, snapshot_b.block_number],
+                tick_indices=[tick_lower, tick_upper],
+            )
+            tick_map = {
+                (row.block_number, row.tick_idx): row
+                for row in tick_snapshots
+            }
+
+            tick_a_lower = self._require_tick_snapshot(tick_map, snapshot_a.block_number, tick_lower)
+            tick_a_upper = self._require_tick_snapshot(tick_map, snapshot_a.block_number, tick_upper)
+            tick_b_lower = self._require_tick_snapshot(tick_map, snapshot_b.block_number, tick_lower)
+            tick_b_upper = self._require_tick_snapshot(tick_map, snapshot_b.block_number, tick_upper)
+
+            delta_inside0, delta_inside1 = self._calculate_delta_inside(
+                snapshot_a=snapshot_a,
+                snapshot_b=snapshot_b,
+                tick_a_lower=tick_a_lower,
+                tick_a_upper=tick_a_upper,
+                tick_b_lower=tick_b_lower,
+                tick_b_upper=tick_b_upper,
+                tick_lower=tick_lower,
+                tick_upper=tick_upper,
             )
 
-        seconds_delta = snapshot_b.block_timestamp - snapshot_a.block_timestamp
-        if seconds_delta <= 0:
-            self._raise_data_not_found(
-                "invalid_seconds_delta",
-                block_a=snapshot_a.block_number,
-                ts_a=snapshot_a.block_timestamp,
-                block_b=snapshot_b.block_number,
-                ts_b=snapshot_b.block_timestamp,
-                seconds_delta=seconds_delta,
+            sqrt_price_current = self._resolve_sqrt_price_current(snapshot_b)
+            sqrt_price_lower = tick_to_sqrt_price(tick_lower)
+            sqrt_price_upper = tick_to_sqrt_price(tick_upper)
+            l_user = position_liquidity_v3(
+                amount_token0=amount_token0,
+                amount_token1=amount_token1,
+                sqrt_price_current=sqrt_price_current,
+                sqrt_price_lower=sqrt_price_lower,
+                sqrt_price_upper=sqrt_price_upper,
+                token0_decimals=pool.token0_decimals,
+                token1_decimals=pool.token1_decimals,
+            )
+            if l_user <= 0:
+                warnings.append("User liquidity is zero for the informed amounts/range.")
+
+            fees_token0_raw = fees_from_delta_inside(delta_inside=delta_inside0, user_liquidity=l_user)
+            fees_token1_raw = fees_from_delta_inside(delta_inside=delta_inside1, user_liquidity=l_user)
+            fees_token0 = fees_token0_raw / (Decimal(10) ** Decimal(pool.token0_decimals))
+            fees_token1 = fees_token1_raw / (Decimal(10) ** Decimal(pool.token1_decimals))
+            fees_period_usd = fees_token1 + (fees_token0 * calculation_price)
+
+            estimated_fees_24h_usd = fees_period_usd * (Decimal(SECONDS_PER_DAY) / Decimal(seconds_delta))
+            yearly_usd = fees_period_usd * (Decimal(365 * SECONDS_PER_DAY) / Decimal(seconds_delta))
+            monthly_usd = yearly_usd / Decimal("12")
+
+            deposit_usd = canonical_command.deposit_usd
+            if deposit_usd is None:
+                deposit_usd = amount_token1 + (amount_token0 * calculation_price)
+                warnings.append("deposit_usd derived from amount_token0/amount_token1 using calculation price.")
+
+            fee_apr = Decimal("0")
+            if deposit_usd > 0:
+                fee_apr = yearly_usd / deposit_usd
+
+            logger.info(
+                "simulate_apr_v2: success pool=%s chain_id=%s dex_id=%s block_a=%s block_b=%s seconds_delta=%s fees_period_usd=%s fee_apr=%s",
+                pool_address,
+                canonical_command.chain_id,
+                canonical_command.dex_id,
+                snapshot_a.block_number,
+                snapshot_b.block_number,
+                seconds_delta,
+                fees_period_usd,
+                fee_apr,
             )
 
-        warnings: list[str] = []
-        calculation_price = self._resolve_calculation_price(
-            command=command,
-            pool=pool,
-            snapshot_b=snapshot_b,
-            tick_lower=tick_lower,
-            tick_upper=tick_upper,
-        )
-        if calculation_price <= 0:
-            raise InvalidSimulationInputError("calculation_price must be positive.")
+            used_price_output = calculation_price
+            if command.swapped_pair:
+                try:
+                    used_price_output = invert_decimal_price(calculation_price, field_name="used_price")
+                except ValueError as exc:
+                    raise InvalidSimulationInputError(str(exc)) from exc
 
-        if (
-            command.deposit_usd is not None
-            and command.deposit_usd > 0
-            and amount_token0 == 0
-            and amount_token1 == 0
-        ):
-            usd_half = command.deposit_usd / Decimal("2")
-            amount_token0 = usd_half / calculation_price
-            amount_token1 = usd_half
-            warnings.append("Derived token amounts from deposit_usd using calculation price (50/50 split).")
+            return SimulateAprV2Output(
+                estimated_fees_period_usd=fees_period_usd,
+                estimated_fees_24h_usd=estimated_fees_24h_usd,
+                monthly_usd=monthly_usd,
+                yearly_usd=yearly_usd,
+                fee_apr=fee_apr,
+                meta=SimulateAprV2MetaOutput(
+                    block_a_number=snapshot_a.block_number,
+                    block_b_number=snapshot_b.block_number,
+                    ts_a=snapshot_a.block_timestamp,
+                    ts_b=snapshot_b.block_timestamp,
+                    seconds_delta=seconds_delta,
+                    used_price=used_price_output,
+                    warnings=warnings,
+                ),
+            )
+        finally:
+            _DATA_NOT_FOUND_BASE_CONTEXT.reset(base_context_token)
 
-        self._ensure_tick_snapshots_present(
-            pool_address=pool_address,
+    def _to_canonical_command(self, command: SimulateAprV2Input) -> SimulateAprV2Input:
+        if not command.swapped_pair:
+            return command
+
+        tick_lower = command.tick_lower
+        tick_upper = command.tick_upper
+        if tick_lower is not None or tick_upper is not None:
+            if tick_lower is None or tick_upper is None:
+                raise InvalidSimulationInputError("tick_lower and tick_upper must be provided together.")
+            try:
+                tick_lower, tick_upper = ui_ticks_to_canonical(tick_lower, tick_upper)
+            except ValueError as exc:
+                raise InvalidSimulationInputError(str(exc)) from exc
+
+        min_price = command.min_price
+        max_price = command.max_price
+        if min_price is not None or max_price is not None:
+            if min_price is None or max_price is None:
+                raise InvalidSimulationInputError("min_price and max_price must be provided together.")
+            try:
+                min_price, max_price = ui_price_range_to_canonical(
+                    min_price,
+                    max_price,
+                    min_field_name="min_price",
+                    max_field_name="max_price",
+                )
+            except ValueError as exc:
+                raise InvalidSimulationInputError(str(exc)) from exc
+
+        amount_token0, amount_token1 = swap_optional_amounts(command.amount_token0, command.amount_token1)
+
+        custom_calculation_price = command.custom_calculation_price
+        if custom_calculation_price is not None:
+            try:
+                custom_calculation_price = invert_decimal_price(
+                    custom_calculation_price,
+                    field_name="custom_calculation_price",
+                )
+            except ValueError as exc:
+                raise InvalidSimulationInputError(str(exc)) from exc
+
+        return SimulateAprV2Input(
+            pool_address=command.pool_address,
             chain_id=command.chain_id,
             dex_id=command.dex_id,
-            block_numbers=[snapshot_a.block_number, snapshot_b.block_number],
-            tick_indices=[tick_lower, tick_upper],
-        )
-
-        tick_snapshots = self._simulate_apr_v2_port.get_tick_snapshots_for_blocks(
-            pool_address=pool_address,
-            chain_id=command.chain_id,
-            dex_id=command.dex_id,
-            block_numbers=[snapshot_a.block_number, snapshot_b.block_number],
-            tick_indices=[tick_lower, tick_upper],
-        )
-        tick_map = {
-            (row.block_number, row.tick_idx): row
-            for row in tick_snapshots
-        }
-
-        tick_a_lower = self._require_tick_snapshot(tick_map, snapshot_a.block_number, tick_lower)
-        tick_a_upper = self._require_tick_snapshot(tick_map, snapshot_a.block_number, tick_upper)
-        tick_b_lower = self._require_tick_snapshot(tick_map, snapshot_b.block_number, tick_lower)
-        tick_b_upper = self._require_tick_snapshot(tick_map, snapshot_b.block_number, tick_upper)
-
-        delta_inside0, delta_inside1 = self._calculate_delta_inside(
-            snapshot_a=snapshot_a,
-            snapshot_b=snapshot_b,
-            tick_a_lower=tick_a_lower,
-            tick_a_upper=tick_a_upper,
-            tick_b_lower=tick_b_lower,
-            tick_b_upper=tick_b_upper,
-            tick_lower=tick_lower,
-            tick_upper=tick_upper,
-        )
-
-        sqrt_price_current = self._resolve_sqrt_price_current(snapshot_b)
-        sqrt_price_lower = tick_to_sqrt_price(tick_lower)
-        sqrt_price_upper = tick_to_sqrt_price(tick_upper)
-        l_user = position_liquidity_v3(
+            deposit_usd=command.deposit_usd,
             amount_token0=amount_token0,
             amount_token1=amount_token1,
-            sqrt_price_current=sqrt_price_current,
-            sqrt_price_lower=sqrt_price_lower,
-            sqrt_price_upper=sqrt_price_upper,
-            token0_decimals=pool.token0_decimals,
-            token1_decimals=pool.token1_decimals,
-        )
-        if l_user <= 0:
-            warnings.append("User liquidity is zero for the informed amounts/range.")
-
-        fees_token0_raw = fees_from_delta_inside(delta_inside=delta_inside0, user_liquidity=l_user)
-        fees_token1_raw = fees_from_delta_inside(delta_inside=delta_inside1, user_liquidity=l_user)
-        fees_token0 = fees_token0_raw / (Decimal(10) ** Decimal(pool.token0_decimals))
-        fees_token1 = fees_token1_raw / (Decimal(10) ** Decimal(pool.token1_decimals))
-        fees_period_usd = fees_token1 + (fees_token0 * calculation_price)
-
-        estimated_fees_24h_usd = fees_period_usd * (Decimal(SECONDS_PER_DAY) / Decimal(seconds_delta))
-        yearly_usd = fees_period_usd * (Decimal(365 * SECONDS_PER_DAY) / Decimal(seconds_delta))
-        monthly_usd = yearly_usd / Decimal("12")
-
-        deposit_usd = command.deposit_usd
-        if deposit_usd is None:
-            deposit_usd = amount_token1 + (amount_token0 * calculation_price)
-            warnings.append("deposit_usd derived from amount_token0/amount_token1 using calculation price.")
-
-        fee_apr = Decimal("0")
-        if deposit_usd > 0:
-            fee_apr = yearly_usd / deposit_usd
-
-        logger.info(
-            "simulate_apr_v2: success pool=%s chain_id=%s dex_id=%s block_a=%s block_b=%s seconds_delta=%s fees_period_usd=%s fee_apr=%s",
-            pool_address,
-            command.chain_id,
-            command.dex_id,
-            snapshot_a.block_number,
-            snapshot_b.block_number,
-            seconds_delta,
-            fees_period_usd,
-            fee_apr,
-        )
-
-        return SimulateAprV2Output(
-            estimated_fees_period_usd=fees_period_usd,
-            estimated_fees_24h_usd=estimated_fees_24h_usd,
-            monthly_usd=monthly_usd,
-            yearly_usd=yearly_usd,
-            fee_apr=fee_apr,
-            meta=SimulateAprV2MetaOutput(
-                block_a_number=snapshot_a.block_number,
-                block_b_number=snapshot_b.block_number,
-                ts_a=snapshot_a.block_timestamp,
-                ts_b=snapshot_b.block_timestamp,
-                seconds_delta=seconds_delta,
-                used_price=calculation_price,
-                warnings=warnings,
-            ),
+            full_range=command.full_range,
+            tick_lower=tick_lower,
+            tick_upper=tick_upper,
+            min_price=min_price,
+            max_price=max_price,
+            horizon=command.horizon,
+            lookback_days=command.lookback_days,
+            calculation_method=command.calculation_method,
+            custom_calculation_price=custom_calculation_price,
+            apr_method=command.apr_method,
+            swapped_pair=command.swapped_pair,
         )
 
     def _ensure_tick_snapshots_present(
@@ -355,9 +466,14 @@ class SimulateAprV2UseCase:
                 dex_id,
                 exc,
             )
-            raise SimulationDataNotFoundError(
-                f"{DATA_NOT_FOUND_MESSAGE} Falha no on-demand do subgraph: {exc}"
-            ) from exc
+            self._raise_data_not_found(
+                "tick_snapshots_on_demand_failed",
+                pool_address=pool_address,
+                chain_id=chain_id,
+                dex_id=dex_id,
+                missing=self._format_missing(missing),
+                error=str(exc),
+            )
 
         fetched_by_combo = {(row.block_number, row.tick_idx): row for row in fetched}
         rows_to_upsert = [
@@ -403,8 +519,12 @@ class SimulateAprV2UseCase:
         )
 
         if remaining:
-            raise SimulationDataNotFoundError(
-                f"{DATA_NOT_FOUND_MESSAGE} Missing tick snapshots: {self._format_missing(remaining)}"
+            self._raise_data_not_found(
+                "tick_snapshots_missing_after_on_demand",
+                pool_address=pool_address,
+                chain_id=chain_id,
+                dex_id=dex_id,
+                missing=self._format_missing(remaining),
             )
 
     def _resolve_range_ticks(self, *, command: SimulateAprV2Input, pool: SimulateAprV2Pool) -> tuple[int, int]:
@@ -424,6 +544,14 @@ class SimulateAprV2UseCase:
                 raise InvalidSimulationInputError("tick_lower and tick_upper must be provided together.")
             if command.tick_lower >= command.tick_upper:
                 raise InvalidSimulationInputError("tick_lower must be lower than tick_upper.")
+            if pool.tick_spacing is not None and pool.tick_spacing > 0:
+                if (command.tick_lower % pool.tick_spacing) != 0 or (command.tick_upper % pool.tick_spacing) != 0:
+                    logger.warning(
+                        "simulate_apr_v2: provided_ticks_not_aligned tick_spacing=%s tick_lower=%s tick_upper=%s",
+                        pool.tick_spacing,
+                        command.tick_lower,
+                        command.tick_upper,
+                    )
             return command.tick_lower, command.tick_upper
 
         if command.min_price is None or command.max_price is None:
@@ -450,7 +578,235 @@ class SimulateAprV2UseCase:
             raise InvalidSimulationInputError(str(exc)) from exc
         if tick_lower >= tick_upper:
             raise InvalidSimulationInputError("Invalid price range for tick conversion.")
+        logger.info(
+            "simulate_apr_v2: price_range_ticks_resolved min_price=%s max_price=%s raw_lower=%s raw_upper=%s",
+            command.min_price,
+            command.max_price,
+            tick_lower,
+            tick_upper,
+        )
         return tick_lower, tick_upper
+
+    def _resolve_exact_boundary_ticks(
+        self,
+        *,
+        command: SimulateAprV2Input,
+        pool: SimulateAprV2Pool,
+        pool_address: str,
+        chain_id: int,
+        dex_id: int,
+        block_numbers: list[int],
+        tick_lower: int,
+        tick_upper: int,
+    ) -> tuple[int, int]:
+        if command.apr_method.strip().lower() != "exact":
+            return tick_lower, tick_upper
+
+        range_from_price = self._is_price_range_input(command)
+        raw_tick_lower = tick_lower
+        raw_tick_upper = tick_upper
+        snapped_tick_lower = tick_lower
+        snapped_tick_upper = tick_upper
+
+        if range_from_price:
+            snapped_tick_lower, snapped_tick_upper = self._snap_ticks_to_spacing(
+                tick_lower=tick_lower,
+                tick_upper=tick_upper,
+                tick_spacing=pool.tick_spacing,
+            )
+            if (snapped_tick_lower, snapped_tick_upper) != (tick_lower, tick_upper):
+                logger.info(
+                    "simulate_apr_v2: exact_boundary_snap_to_spacing tick_spacing=%s lower_before=%s upper_before=%s lower_after=%s upper_after=%s",
+                    pool.tick_spacing,
+                    tick_lower,
+                    tick_upper,
+                    snapped_tick_lower,
+                    snapped_tick_upper,
+                )
+            tick_lower = snapped_tick_lower
+            tick_upper = snapped_tick_upper
+
+        try:
+            self._ensure_tick_snapshots_present(
+                pool_address=pool_address,
+                chain_id=chain_id,
+                dex_id=dex_id,
+                block_numbers=block_numbers,
+                tick_indices=[tick_lower, tick_upper],
+            )
+            return tick_lower, tick_upper
+        except SimulationDataNotFoundError as exc:
+            if not range_from_price or exc.code != "tick_snapshots_missing_after_on_demand":
+                raise
+
+            initial_missing = exc.context.get("missing")
+            adjusted = self._pick_snapshotable_boundaries_from_initialized_ticks(
+                pool_address=pool_address,
+                chain_id=chain_id,
+                dex_id=dex_id,
+                tick_lower=tick_lower,
+                tick_upper=tick_upper,
+            )
+            if adjusted is None:
+                self._raise_data_not_found(
+                    "price_range_boundaries_not_snapshotable",
+                    pool_address=pool_address,
+                    chain_id=chain_id,
+                    dex_id=dex_id,
+                    raw_tick_lower=raw_tick_lower,
+                    raw_tick_upper=raw_tick_upper,
+                    snapped_tick_lower=snapped_tick_lower,
+                    snapped_tick_upper=snapped_tick_upper,
+                    adjusted_tick_lower=None,
+                    adjusted_tick_upper=None,
+                    missing=initial_missing,
+                )
+
+            adjusted_tick_lower, adjusted_tick_upper = adjusted
+            logger.info(
+                "simulate_apr_v2: exact_boundary_adjusted_to_initialized lower_before=%s upper_before=%s lower_after=%s upper_after=%s",
+                tick_lower,
+                tick_upper,
+                adjusted_tick_lower,
+                adjusted_tick_upper,
+            )
+
+            try:
+                self._ensure_tick_snapshots_present(
+                    pool_address=pool_address,
+                    chain_id=chain_id,
+                    dex_id=dex_id,
+                    block_numbers=block_numbers,
+                    tick_indices=[adjusted_tick_lower, adjusted_tick_upper],
+                )
+                return adjusted_tick_lower, adjusted_tick_upper
+            except SimulationDataNotFoundError as adjusted_exc:
+                if adjusted_exc.code != "tick_snapshots_missing_after_on_demand":
+                    raise
+                self._raise_data_not_found(
+                    "price_range_boundaries_not_snapshotable",
+                    pool_address=pool_address,
+                    chain_id=chain_id,
+                    dex_id=dex_id,
+                    raw_tick_lower=raw_tick_lower,
+                    raw_tick_upper=raw_tick_upper,
+                    snapped_tick_lower=snapped_tick_lower,
+                    snapped_tick_upper=snapped_tick_upper,
+                    adjusted_tick_lower=adjusted_tick_lower,
+                    adjusted_tick_upper=adjusted_tick_upper,
+                    missing=adjusted_exc.context.get("missing"),
+                )
+
+    def _is_price_range_input(self, command: SimulateAprV2Input) -> bool:
+        return (
+            not command.full_range
+            and command.tick_lower is None
+            and command.tick_upper is None
+            and command.min_price is not None
+            and command.max_price is not None
+        )
+
+    def _snap_ticks_to_spacing(
+        self,
+        *,
+        tick_lower: int,
+        tick_upper: int,
+        tick_spacing: int | None,
+    ) -> tuple[int, int]:
+        if tick_spacing is None or tick_spacing <= 0:
+            return tick_lower, tick_upper
+
+        snapped_lower = (tick_lower // tick_spacing) * tick_spacing
+        snapped_upper = ((tick_upper + tick_spacing - 1) // tick_spacing) * tick_spacing
+        if snapped_lower >= snapped_upper:
+            raise InvalidSimulationInputError("Invalid tick range after snapping to tick_spacing.")
+        if snapped_lower < UNISWAP_V3_MIN_TICK or snapped_upper > UNISWAP_V3_MAX_TICK:
+            raise InvalidSimulationInputError("Tick range is out of Uniswap v3 bounds.")
+        return snapped_lower, snapped_upper
+
+    def _pick_snapshotable_boundaries_from_initialized_ticks(
+        self,
+        *,
+        pool_address: str,
+        chain_id: int,
+        dex_id: int,
+        tick_lower: int,
+        tick_upper: int,
+    ) -> tuple[int, int] | None:
+        initialized_ticks = self._simulate_apr_v2_port.get_initialized_ticks(
+            pool_address=pool_address,
+            chain_id=chain_id,
+            dex_id=dex_id,
+            min_tick=tick_lower,
+            max_tick=tick_upper,
+        )
+        selected = self._select_boundary_pair_from_initialized_ticks(
+            initialized_ticks=initialized_ticks,
+            tick_lower=tick_lower,
+            tick_upper=tick_upper,
+        )
+        if selected is not None:
+            return selected
+
+        fetched_initialized_ticks = self._fetch_initialized_ticks_on_demand(
+            pool_address=pool_address,
+            chain_id=chain_id,
+            dex_id=dex_id,
+            tick_lower=tick_lower,
+            tick_upper=tick_upper,
+        )
+        combined_initialized_ticks = initialized_ticks + fetched_initialized_ticks
+        selected = self._select_boundary_pair_from_initialized_ticks(
+            initialized_ticks=combined_initialized_ticks,
+            tick_lower=tick_lower,
+            tick_upper=tick_upper,
+        )
+        return selected
+
+    def _select_boundary_pair_from_initialized_ticks(
+        self,
+        *,
+        initialized_ticks: list[SimulateAprInitializedTick],
+        tick_lower: int,
+        tick_upper: int,
+    ) -> tuple[int, int] | None:
+        unique_ticks = sorted({item.tick_idx for item in initialized_ticks})
+        if len(unique_ticks) < 2:
+            return None
+
+        lower_inside = next((tick for tick in unique_ticks if tick >= tick_lower), None)
+        lower_outside = next((tick for tick in reversed(unique_ticks) if tick < tick_lower), None)
+        upper_inside = next((tick for tick in reversed(unique_ticks) if tick <= tick_upper), None)
+        upper_outside = next((tick for tick in unique_ticks if tick > tick_upper), None)
+
+        lower_options: list[tuple[int, int, int]] = []
+        upper_options: list[tuple[int, int, int]] = []
+        if lower_inside is not None:
+            lower_options.append((lower_inside, 0, abs(lower_inside - tick_lower)))
+        if lower_outside is not None:
+            lower_options.append((lower_outside, 1, abs(lower_outside - tick_lower)))
+        if upper_inside is not None:
+            upper_options.append((upper_inside, 0, abs(upper_inside - tick_upper)))
+        if upper_outside is not None:
+            upper_options.append((upper_outside, 1, abs(upper_outside - tick_upper)))
+
+        best_pair: tuple[int, int] | None = None
+        best_score: tuple[int, int, int] | None = None
+        target_width = tick_upper - tick_lower
+        for lower_tick, lower_outside_penalty, lower_distance in lower_options:
+            for upper_tick, upper_outside_penalty, upper_distance in upper_options:
+                if lower_tick >= upper_tick:
+                    continue
+                width_distance = abs((upper_tick - lower_tick) - target_width)
+                score = (
+                    lower_outside_penalty + upper_outside_penalty,
+                    lower_distance + upper_distance,
+                    width_distance,
+                )
+                if best_score is None or score < best_score:
+                    best_score = score
+                    best_pair = (lower_tick, upper_tick)
+        return best_pair
 
     def _resolve_calculation_price(
         self,
@@ -488,14 +844,22 @@ class SimulateAprV2UseCase:
             max_tick=tick_upper,
         )
         if not initialized_ticks:
-            self._raise_data_not_found(
-                "initialized_ticks_not_found",
+            initialized_ticks = self._fetch_initialized_ticks_on_demand(
                 pool_address=command.pool_address.lower(),
                 chain_id=command.chain_id,
                 dex_id=command.dex_id,
                 tick_lower=tick_lower,
                 tick_upper=tick_upper,
             )
+            if not initialized_ticks:
+                self._raise_data_not_found(
+                    "initialized_ticks_not_found",
+                    pool_address=command.pool_address.lower(),
+                    chain_id=command.chain_id,
+                    dex_id=command.dex_id,
+                    tick_lower=tick_lower,
+                    tick_upper=tick_upper,
+                )
 
         liquidity_curve = build_liquidity_curve(initialized_ticks)
         candidates = self._build_tick_candidates(
@@ -535,6 +899,110 @@ class SimulateAprV2UseCase:
 
         logger.warning("simulate_apr_v2: unsupported calculation_method=%s", method)
         raise InvalidSimulationInputError("Unsupported calculation_method.")
+
+    def _fetch_initialized_ticks_on_demand(
+        self,
+        *,
+        pool_address: str,
+        chain_id: int,
+        dex_id: int,
+        tick_lower: int,
+        tick_upper: int,
+    ) -> list[SimulateAprInitializedTick]:
+        min_tick = tick_lower - INITIALIZED_TICKS_MARGIN
+        max_tick = tick_upper + INITIALIZED_TICKS_MARGIN
+        logger.info(
+            "simulate_apr_v2: initialized_ticks_on_demand_start pool=%s chain_id=%s dex_id=%s min_tick=%s max_tick=%s",
+            pool_address,
+            chain_id,
+            dex_id,
+            min_tick,
+            max_tick,
+        )
+        start = perf_counter()
+        try:
+            source_rows = self._tick_snapshot_on_demand_port.fetch_initialized_ticks(
+                pool_address=pool_address,
+                chain_id=chain_id,
+                dex_id=dex_id,
+                min_tick=min_tick,
+                max_tick=max_tick,
+            )
+        except RuntimeError as exc:
+            logger.warning(
+                "simulate_apr_v2: initialized_ticks_on_demand_failed pool=%s chain_id=%s dex_id=%s error=%s",
+                pool_address,
+                chain_id,
+                dex_id,
+                exc,
+            )
+            self._raise_data_not_found(
+                "initialized_ticks_on_demand_failed",
+                pool_address=pool_address,
+                chain_id=chain_id,
+                dex_id=dex_id,
+                min_tick=min_tick,
+                max_tick=max_tick,
+                error=str(exc),
+            )
+
+        rows = self._map_initialized_tick_rows(source_rows)
+        if source_rows:
+            try:
+                persisted = self._tick_snapshot_on_demand_port.upsert_initialized_ticks(
+                    pool_address=pool_address,
+                    chain_id=chain_id,
+                    dex_id=dex_id,
+                    rows=source_rows,
+                )
+                logger.info(
+                    "simulate_apr_v2: initialized_ticks_on_demand_persisted pool=%s chain_id=%s dex_id=%s persisted=%s",
+                    pool_address,
+                    chain_id,
+                    dex_id,
+                    persisted,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "simulate_apr_v2: initialized_ticks_on_demand_persist_failed pool=%s chain_id=%s dex_id=%s error=%s",
+                    pool_address,
+                    chain_id,
+                    dex_id,
+                    exc,
+                )
+        elapsed_ms = (perf_counter() - start) * 1000
+        logger.info(
+            "simulate_apr_v2: initialized_ticks_on_demand_end pool=%s chain_id=%s dex_id=%s fetched=%s elapsed_ms=%.2f",
+            pool_address,
+            chain_id,
+            dex_id,
+            len(rows),
+            elapsed_ms,
+        )
+        return rows
+
+    def _map_initialized_tick_rows(
+        self,
+        rows: list[InitializedTickSourceRow],
+    ) -> list[SimulateAprInitializedTick]:
+        mapped: list[SimulateAprInitializedTick] = []
+        for row in rows:
+            if row.liquidity_net is None:
+                continue
+            try:
+                liquidity_net = Decimal(str(row.liquidity_net))
+            except (ArithmeticError, ValueError):
+                continue
+            if liquidity_net == 0:
+                continue
+            mapped.append(
+                SimulateAprInitializedTick(
+                    tick_idx=int(row.tick_idx),
+                    liquidity_net=liquidity_net,
+                )
+            )
+        mapped.sort(key=lambda item: item.tick_idx)
+        return mapped
 
     def _build_tick_candidates(
         self,
@@ -708,10 +1176,8 @@ class SimulateAprV2UseCase:
                 tick_upper=tick_upper,
             )
 
-            delta_inside0 = inside0_b - inside0_a
-            delta_inside1 = inside1_b - inside1_a
-            if delta_inside0 < 0 or delta_inside1 < 0:
-                raise ValueError("Negative deltaInside.")
+            delta_inside0 = delta_uint256(inside0_b, inside0_a)
+            delta_inside1 = delta_uint256(inside1_b, inside1_a)
             return delta_inside0, delta_inside1
         except (TypeError, ValueError) as exc:
             logger.warning(
@@ -722,7 +1188,14 @@ class SimulateAprV2UseCase:
                 tick_upper,
                 exc,
             )
-            raise SimulationDataNotFoundError(DATA_NOT_FOUND_MESSAGE) from exc
+            self._raise_data_not_found(
+                "invalid_exact_fee_growth_data",
+                block_a=snapshot_a.block_number,
+                block_b=snapshot_b.block_number,
+                tick_lower=tick_lower,
+                tick_upper=tick_upper,
+                error=str(exc),
+            )
 
     def _parse_horizon(self, horizon_raw: str) -> tuple[int, Decimal]:
         raw = horizon_raw.strip().lower()
@@ -747,8 +1220,14 @@ class SimulateAprV2UseCase:
         return horizon_hours, annualization_days
 
     def _raise_data_not_found(self, reason: str, **context) -> NoReturn:
-        logger.warning("simulate_apr_v2: data_not_found reason=%s context=%s", reason, context)
-        raise SimulationDataNotFoundError(DATA_NOT_FOUND_MESSAGE)
+        base_context = _DATA_NOT_FOUND_BASE_CONTEXT.get({})
+        merged_context = {**base_context, **context}
+        logger.warning("simulate_apr_v2: data_not_found reason=%s context=%s", reason, merged_context)
+        raise SimulationDataNotFoundError(
+            DATA_NOT_FOUND_MESSAGE,
+            code=reason,
+            context=merged_context,
+        )
 
     def _format_missing(self, missing: list[MissingTickSnapshot]) -> list[tuple[int, int]]:
         return [(item.block_number, item.tick_idx) for item in missing]

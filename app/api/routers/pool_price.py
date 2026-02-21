@@ -31,6 +31,7 @@ def get_pool_price(
     days: int | None = None,
     start: datetime | None = None,
     end: datetime | None = None,
+    swapped_pair: bool = False,
     _token: str = Depends(require_jwt),
     use_case: GetPoolPriceUseCase = Depends(get_pool_price_use_case),
 ):
@@ -43,6 +44,7 @@ def get_pool_price(
                 days=days,
                 start=start,
                 end=end,
+                swapped_pair=swapped_pair,
             )
         )
     except PoolNotFoundError as exc:

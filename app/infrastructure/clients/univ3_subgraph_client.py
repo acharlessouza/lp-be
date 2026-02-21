@@ -7,7 +7,12 @@ import time
 
 import httpx
 
-from app.application.dto.tick_snapshot_on_demand import BlockUpsertRow, MissingTickSnapshot, TickSnapshotUpsertRow
+from app.application.dto.tick_snapshot_on_demand import (
+    BlockUpsertRow,
+    InitializedTickSourceRow,
+    MissingTickSnapshot,
+    TickSnapshotUpsertRow,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -149,6 +154,116 @@ class Univ3SubgraphClient:
             chain_id,
         )
         return mapped
+
+    def fetch_initialized_ticks(
+        self,
+        *,
+        pool_address: str,
+        chain_id: int,
+        min_tick: int,
+        max_tick: int,
+    ) -> list[InitializedTickSourceRow]:
+        if min_tick > max_tick:
+            return []
+
+        subgraph_url = self._resolve_subgraph_url(chain_id)
+        pool_id = pool_address.lower()
+        page_size = 1000
+        last_tick = min_tick - 1
+        use_sem_growth = chain_id == 42161
+        result: list[InitializedTickSourceRow] = []
+
+        query_ticks = """
+        query InitializedTicksInRange($poolId: ID!, $lastTick: Int!, $maxTick: Int!, $pageSize: Int!) {
+          ticks(
+            first: $pageSize,
+            orderBy: tickIdx,
+            orderDirection: asc,
+            where: { pool: $poolId, tickIdx_gt: $lastTick, tickIdx_lte: $maxTick, liquidityNet_not: "0" }
+          ) {
+            tickIdx
+            liquidityGross
+            liquidityNet
+            price0
+            price1
+            feeGrowthOutside0X128
+            feeGrowthOutside1X128
+          }
+          _meta { block { number } }
+        }
+        """
+        query_ticks_sem_growth = """
+        query InitializedTicksInRange($poolId: ID!, $lastTick: Int!, $maxTick: Int!, $pageSize: Int!) {
+          ticks(
+            first: $pageSize,
+            orderBy: tickIdx,
+            orderDirection: asc,
+            where: { pool: $poolId, tickIdx_gt: $lastTick, tickIdx_lte: $maxTick, liquidityNet_not: "0" }
+          ) {
+            tickIdx
+            liquidityGross
+            liquidityNet
+            price0
+            price1
+          }
+          _meta { block { number } }
+        }
+        """
+
+        pages = 0
+        while True:
+            payload = self._post_graphql(
+                url=subgraph_url,
+                query=query_ticks_sem_growth if use_sem_growth else query_ticks,
+                variables={
+                    "poolId": pool_id,
+                    "lastTick": int(last_tick),
+                    "maxTick": int(max_tick),
+                    "pageSize": page_size,
+                },
+            )
+            rows = payload.get("data", {}).get("ticks") or []
+            if not rows:
+                break
+            pages += 1
+            meta_block = (payload.get("data", {}).get("_meta") or {}).get("block") or {}
+            updated_at_block = meta_block.get("number")
+
+            for row in rows:
+                tick_idx = row.get("tickIdx")
+                if tick_idx is None:
+                    continue
+                result.append(
+                    InitializedTickSourceRow(
+                        tick_idx=int(tick_idx),
+                        liquidity_net=row.get("liquidityNet"),
+                        liquidity_gross=row.get("liquidityGross"),
+                        price0=row.get("price0"),
+                        price1=row.get("price1"),
+                        fee_growth_outside0_x128=row.get("feeGrowthOutside0X128"),
+                        fee_growth_outside1_x128=row.get("feeGrowthOutside1X128"),
+                        updated_at_block=int(updated_at_block) if updated_at_block is not None else None,
+                    )
+                )
+
+            last_row_tick = rows[-1].get("tickIdx")
+            if last_row_tick is None:
+                break
+            last_tick = int(last_row_tick)
+            if len(rows) < page_size:
+                break
+
+        logger.info(
+            "univ3_subgraph_client: fetched_initialized_ticks fetched=%s pages=%s pool=%s chain_id=%s min_tick=%s max_tick=%s mode=%s",
+            len(result),
+            pages,
+            pool_id,
+            chain_id,
+            min_tick,
+            max_tick,
+            "sem_growth" if use_sem_growth else "default",
+        )
+        return result
 
     def _fetch_tick_at_block(
         self,
@@ -299,6 +414,8 @@ class Univ3SubgraphClient:
         return self._build_gateway_url(subgraph_id)
 
     def _build_gateway_url(self, subgraph_id: str) -> str:
+        if subgraph_id.startswith("http://") or subgraph_id.startswith("https://"):
+            return subgraph_id.rstrip("/")
         base = self._settings.graph_gateway_base.rstrip("/")
         api_key = self._settings.graph_api_key.strip()
         if api_key:

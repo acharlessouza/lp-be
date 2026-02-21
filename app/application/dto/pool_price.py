@@ -15,6 +15,7 @@ class GetPoolPriceInput:
     days: int | None = None
     start: datetime | None = None
     end: datetime | None = None
+    swapped_pair: bool = False
 
 
 @dataclass(frozen=True)

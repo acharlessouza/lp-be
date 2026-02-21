@@ -146,6 +146,54 @@ class GetLiquidityDistributionDefaultRangeUseCaseTests(unittest.TestCase):
                 )
             )
 
+    def test_swapped_pair_inverts_ticks_and_prices_for_ui_reference(self):
+        pool = LiquidityDistributionPool(
+            id=1,
+            token0_symbol="WETH",
+            token1_symbol="USDT",
+            token0_decimals=0,
+            token1_decimals=0,
+            fee_tier=3000,
+            tick_spacing=60,
+            pool_tick=12000,
+            current_tick=12000,
+            current_price_token1_per_token0=Decimal("3"),
+            onchain_liquidity=Decimal("1"),
+        )
+        use_case = GetLiquidityDistributionDefaultRangeUseCase(
+            distribution_port=FakeDistributionPort(pool)
+        )
+
+        canonical = use_case.execute(
+            GetLiquidityDistributionDefaultRangeInput(
+                pool_id=1,
+                chain_id=None,
+                dex_id=None,
+                snapshot_date=date(2026, 2, 16),
+                preset="wide",
+                initial_price=Decimal("3"),
+                center_tick=-12000,
+                swapped_pair=False,
+            )
+        )
+        swapped = use_case.execute(
+            GetLiquidityDistributionDefaultRangeInput(
+                pool_id=1,
+                chain_id=None,
+                dex_id=None,
+                snapshot_date=date(2026, 2, 16),
+                preset="wide",
+                initial_price=Decimal("0.3333333333333333"),
+                center_tick=12000,
+                swapped_pair=True,
+            )
+        )
+
+        self.assertEqual(swapped.min_tick, -canonical.max_tick)
+        self.assertEqual(swapped.max_tick, -canonical.min_tick)
+        self.assertAlmostEqual(swapped.min_price, 1 / canonical.max_price, places=12)
+        self.assertAlmostEqual(swapped.max_price, 1 / canonical.min_price, places=12)
+
 
 if __name__ == "__main__":
     unittest.main()

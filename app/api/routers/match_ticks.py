@@ -24,6 +24,7 @@ def match_ticks(
                 pool_id=req.pool_id,
                 min_price=req.min_price,
                 max_price=req.max_price,
+                swapped_pair=req.swapped_pair,
             )
         )
     except PoolNotFoundError as exc:

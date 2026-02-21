@@ -32,6 +32,7 @@ class SimulateAprV2Request(BaseModel):
         description="Preco customizado (obrigatorio quando calculation_method=custom).",
     )
     apr_method: Literal["exact"] = Field("exact", description="Metodo de APR; v2 suporta apenas exact.")
+    swapped_pair: bool = Field(False, description="Quando true, interpreta/retorna dados no par invertido.")
 
 
 class SimulateAprV2MetaResponse(BaseModel):

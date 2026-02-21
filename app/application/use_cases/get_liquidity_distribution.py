@@ -13,6 +13,7 @@ from app.domain.exceptions import (
     LiquidityDistributionInputError,
     LiquidityDistributionNotFoundError,
 )
+from app.domain.services.pair_orientation import invert_float_price
 from app.domain.services.liquidity_distribution import build_liquidity_distribution
 
 
@@ -34,6 +35,8 @@ class GetLiquidityDistributionUseCase:
         current_tick = command.center_tick if command.center_tick is not None else pool.current_tick
         if current_tick is None:
             raise LiquidityDistributionNotFoundError("Pool current tick not found.")
+        if command.swapped_pair and command.center_tick is not None:
+            current_tick = -current_tick
 
         latest_period = self._distribution_port.get_latest_period_start(pool_id=pool.id)
         if latest_period is None:
@@ -48,6 +51,7 @@ class GetLiquidityDistributionUseCase:
 
         min_tick = current_tick - command.tick_range
         max_tick = current_tick + command.tick_range
+
         points = build_liquidity_distribution(
             rows=rows,
             current_tick=current_tick,
@@ -60,16 +64,39 @@ class GetLiquidityDistributionUseCase:
         if not points:
             raise LiquidityDistributionNotFoundError("Tick snapshot not found.")
 
-        return GetLiquidityDistributionOutput(
-            token0=pool.token0_symbol,
-            token1=pool.token1_symbol,
-            current_tick=current_tick,
-            data=[
+        output_points = [
+            LiquidityDistributionPointOutput(
+                tick=tick,
+                liquidity=str(liquidity),
+                price=price,
+            )
+            for tick, liquidity, price in points
+        ]
+
+        if not command.swapped_pair:
+            return GetLiquidityDistributionOutput(
+                token0=pool.token0_symbol,
+                token1=pool.token1_symbol,
+                current_tick=current_tick,
+                data=output_points,
+            )
+
+        try:
+            swapped_points = [
                 LiquidityDistributionPointOutput(
-                    tick=tick,
-                    liquidity=str(liquidity),
-                    price=price,
+                    tick=-item.tick,
+                    liquidity=item.liquidity,
+                    price=invert_float_price(item.price, field_name="price"),
                 )
-                for tick, liquidity, price in points
-            ],
+                for item in output_points
+            ]
+        except ValueError as exc:
+            raise LiquidityDistributionInputError(str(exc)) from exc
+        swapped_points.sort(key=lambda item: item.tick)
+
+        return GetLiquidityDistributionOutput(
+            token0=pool.token1_symbol,
+            token1=pool.token0_symbol,
+            current_tick=-current_tick,
+            data=swapped_points,
         )

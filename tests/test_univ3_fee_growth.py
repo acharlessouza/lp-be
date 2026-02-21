@@ -4,7 +4,13 @@ from decimal import Decimal
 
 import pytest
 
-from app.domain.services.univ3_fee_growth import fee_growth_inside, fees_from_delta_inside, parse_uint256
+from app.domain.services.univ3_fee_growth import (
+    UINT256_MOD,
+    delta_uint256,
+    fee_growth_inside,
+    fees_from_delta_inside,
+    parse_uint256,
+)
 
 
 class TestUniv3FeeGrowth:
@@ -57,3 +63,18 @@ class TestUniv3FeeGrowth:
             parse_uint256("")
         with pytest.raises(ValueError):
             parse_uint256(-1)
+
+    def test_fee_growth_inside_handles_uint256_wrap(self):
+        global_growth = 10
+        inside = fee_growth_inside(
+            fee_growth_global=global_growth,
+            fee_growth_outside_lower=20,
+            fee_growth_outside_upper=5,
+            tick_current=-20,
+            tick_lower=-10,
+            tick_upper=10,
+        )
+        assert 0 <= inside < UINT256_MOD
+
+    def test_delta_uint256_handles_wrap(self):
+        assert delta_uint256(5, 10) == UINT256_MOD - 5

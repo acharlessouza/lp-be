@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 
 
 @dataclass(frozen=True)
@@ -13,6 +14,9 @@ class GetLiquidityDistributionInput:
     current_tick: int
     center_tick: int | None
     tick_range: int
+    range_min: Decimal | None = None
+    range_max: Decimal | None = None
+    swapped_pair: bool = False
 
 
 @dataclass(frozen=True)

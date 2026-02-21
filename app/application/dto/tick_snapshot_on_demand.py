@@ -27,3 +27,15 @@ class BlockUpsertRow:
     chain_id: int
     block_number: int
     timestamp: int
+
+
+@dataclass(frozen=True)
+class InitializedTickSourceRow:
+    tick_idx: int
+    liquidity_net: str | int | None
+    liquidity_gross: str | int | None = None
+    price0: str | int | None = None
+    price1: str | int | None = None
+    fee_growth_outside0_x128: str | int | None = None
+    fee_growth_outside1_x128: str | int | None = None
+    updated_at_block: int | None = None

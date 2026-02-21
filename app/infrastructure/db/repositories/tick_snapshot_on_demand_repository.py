@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 from time import perf_counter
 
 from sqlalchemy import bindparam, text
 
 from app.application.dto.tick_snapshot_on_demand import (
     BlockUpsertRow,
+    InitializedTickSourceRow,
     MissingTickSnapshot,
     TickSnapshotUpsertRow,
 )
@@ -23,6 +25,7 @@ class SqlTickSnapshotOnDemandRepository(TickSnapshotOnDemandPort):
         self._subgraph_client = subgraph_client
         self._tick_snapshot_columns: set[str] | None = None
         self._blocks_columns: set[str] | None = None
+        self._pool_ticks_initialized_columns: set[str] | None = None
 
     def get_missing_tick_snapshots(
         self,
@@ -221,6 +224,142 @@ class SqlTickSnapshotOnDemandRepository(TickSnapshotOnDemandPort):
         logger.info("tick_snapshot_on_demand_repo: upsert_blocks rows=%s", len(rows))
         return len(rows)
 
+    def fetch_initialized_ticks(
+        self,
+        *,
+        pool_address: str,
+        chain_id: int,
+        dex_id: int,
+        min_tick: int,
+        max_tick: int,
+    ) -> list[InitializedTickSourceRow]:
+        _ = dex_id
+        start = perf_counter()
+        rows = self._subgraph_client.fetch_initialized_ticks(
+            pool_address=pool_address,
+            chain_id=chain_id,
+            min_tick=min_tick,
+            max_tick=max_tick,
+        )
+        elapsed_ms = (perf_counter() - start) * 1000
+        filtered: list[InitializedTickSourceRow] = []
+        for row in rows:
+            if row.liquidity_net is None:
+                continue
+            try:
+                if Decimal(str(row.liquidity_net)) == 0:
+                    continue
+            except (ArithmeticError, ValueError):
+                continue
+            filtered.append(row)
+        logger.info(
+            "tick_snapshot_on_demand_repo: fetched_initialized_ticks requested_range=[%s,%s] fetched=%s non_zero=%s elapsed_ms=%.2f",
+            min_tick,
+            max_tick,
+            len(rows),
+            len(filtered),
+            elapsed_ms,
+        )
+        return filtered
+
+    def upsert_initialized_ticks(
+        self,
+        *,
+        pool_address: str,
+        chain_id: int,
+        dex_id: int,
+        rows: list[InitializedTickSourceRow],
+    ) -> int:
+        if not rows:
+            return 0
+
+        columns = self._get_pool_ticks_initialized_columns()
+        required_columns = {"dex_id", "chain_id", "pool_address", "tick_idx", "liquidity_net"}
+        if not required_columns.issubset(columns):
+            logger.warning(
+                "tick_snapshot_on_demand_repo: pool_ticks_initialized missing required columns, skip upsert columns=%s",
+                sorted(columns),
+            )
+            return 0
+
+        optional_order = [
+            "liquidity_gross",
+            "price0",
+            "price1",
+            "fee_growth_outside0_x128",
+            "fee_growth_outside1_x128",
+            "updated_at_block",
+        ]
+        insert_columns = ["dex_id", "chain_id", "pool_address", "tick_idx", "liquidity_net"] + [
+            col for col in optional_order if col in columns
+        ]
+
+        values_clause = ", ".join(f":{col}" for col in insert_columns)
+        updates = [
+            f"{col} = EXCLUDED.{col}"
+            for col in insert_columns
+            if col not in {"dex_id", "chain_id", "pool_address", "tick_idx"}
+        ]
+        if "updated_at" in columns:
+            updates.append("updated_at = now()")
+
+        sql = text(
+            f"""
+            INSERT INTO public.pool_ticks_initialized ({", ".join(insert_columns)})
+            VALUES ({values_clause})
+            ON CONFLICT (dex_id, chain_id, pool_address, tick_idx)
+            DO UPDATE SET {", ".join(updates)}
+            """
+        )
+
+        params: list[dict] = []
+        pool_addr_lower = pool_address.lower()
+        for row in rows:
+            if row.liquidity_net is None:
+                continue
+            try:
+                liquidity_net = Decimal(str(row.liquidity_net))
+            except (ArithmeticError, ValueError):
+                continue
+            if liquidity_net == 0:
+                continue
+
+            item: dict = {
+                "dex_id": dex_id,
+                "chain_id": chain_id,
+                "pool_address": pool_addr_lower,
+                "tick_idx": int(row.tick_idx),
+                "liquidity_net": liquidity_net,
+            }
+            if "liquidity_gross" in insert_columns:
+                item["liquidity_gross"] = _to_decimal_or_none(row.liquidity_gross)
+            if "price0" in insert_columns:
+                item["price0"] = _to_decimal_or_none(row.price0)
+            if "price1" in insert_columns:
+                item["price1"] = _to_decimal_or_none(row.price1)
+            if "fee_growth_outside0_x128" in insert_columns:
+                item["fee_growth_outside0_x128"] = row.fee_growth_outside0_x128
+            if "fee_growth_outside1_x128" in insert_columns:
+                item["fee_growth_outside1_x128"] = row.fee_growth_outside1_x128
+            if "updated_at_block" in insert_columns:
+                item["updated_at_block"] = row.updated_at_block
+            params.append(item)
+
+        if not params:
+            return 0
+
+        with self._engine.begin() as conn:
+            conn.execute(sql, params)
+
+        logger.info(
+            "tick_snapshot_on_demand_repo: upsert_initialized_ticks rows=%s pool=%s chain_id=%s dex_id=%s",
+            len(params),
+            pool_addr_lower,
+            chain_id,
+            dex_id,
+        )
+        return len(params)
+
     def _get_tick_snapshot_columns(self) -> set[str]:
         if self._tick_snapshot_columns is not None:
             return self._tick_snapshot_columns
@@ -256,3 +395,30 @@ class SqlTickSnapshotOnDemandRepository(TickSnapshotOnDemandPort):
 
         self._blocks_columns = {str(row["column_name"]) for row in rows}
         return self._blocks_columns
+
+    def _get_pool_ticks_initialized_columns(self) -> set[str]:
+        if self._pool_ticks_initialized_columns is not None:
+            return self._pool_ticks_initialized_columns
+
+        sql = text(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'pool_ticks_initialized'
+            """
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(sql).mappings().all()
+
+        self._pool_ticks_initialized_columns = {str(row["column_name"]) for row in rows}
+        return self._pool_ticks_initialized_columns
+
+
+def _to_decimal_or_none(value: str | int | None) -> Decimal | None:
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value))
+    except (ArithmeticError, ValueError):
+        return None

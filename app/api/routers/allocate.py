@@ -28,6 +28,7 @@ def allocate(
                 full_range=req.full_range,
                 range_min=req.range1,
                 range_max=req.range2,
+                swapped_pair=req.swapped_pair,
             )
         )
     except PoolNotFoundError as exc:

@@ -9,6 +9,7 @@ class MatchTicksInput:
     pool_id: int
     min_price: Decimal
     max_price: Decimal
+    swapped_pair: bool = False
 
 
 @dataclass(frozen=True)

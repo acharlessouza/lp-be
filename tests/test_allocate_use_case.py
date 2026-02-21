@@ -87,6 +87,63 @@ class AllocateUseCaseTests(unittest.TestCase):
                 )
             )
 
+    def test_swapped_pair_converts_range_and_returns_amounts_in_ui_orientation(self):
+        use_case = AllocateUseCase(pool_port=FakePoolPort(), price_port=FakePricePort())
+
+        min_ui = Decimal("0.0004")
+        max_ui = Decimal("0.0006")
+        min_canonical = Decimal("1") / max_ui
+        max_canonical = Decimal("1") / min_ui
+
+        canonical = use_case.execute(
+            self._base_input(
+                full_range=False,
+                range_min=min_canonical,
+                range_max=max_canonical,
+                swapped_pair=False,
+            )
+        )
+        swapped = use_case.execute(
+            self._base_input(
+                full_range=False,
+                range_min=min_ui,
+                range_max=max_ui,
+                swapped_pair=True,
+            )
+        )
+
+        self.assertEqual(swapped.token0_symbol, canonical.token1_symbol)
+        self.assertEqual(swapped.token1_symbol, canonical.token0_symbol)
+        self.assertEqual(swapped.amount_token0, canonical.amount_token1)
+        self.assertEqual(swapped.amount_token1, canonical.amount_token0)
+        self.assertEqual(swapped.price_token0_usd, canonical.price_token1_usd)
+        self.assertEqual(swapped.price_token1_usd, canonical.price_token0_usd)
+
+    def test_swapped_pair_swaps_full_range_output(self):
+        use_case = AllocateUseCase(pool_port=FakePoolPort(), price_port=FakePricePort())
+
+        canonical = use_case.execute(
+            self._base_input(
+                full_range=True,
+                range_min=None,
+                range_max=None,
+                swapped_pair=False,
+            )
+        )
+        swapped = use_case.execute(
+            self._base_input(
+                full_range=True,
+                range_min=None,
+                range_max=None,
+                swapped_pair=True,
+            )
+        )
+
+        self.assertEqual(swapped.token0_symbol, canonical.token1_symbol)
+        self.assertEqual(swapped.token1_symbol, canonical.token0_symbol)
+        self.assertEqual(swapped.amount_token0, canonical.amount_token1)
+        self.assertEqual(swapped.amount_token1, canonical.amount_token0)
+
 
 if __name__ == "__main__":
     unittest.main()

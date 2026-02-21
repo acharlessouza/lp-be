@@ -13,6 +13,7 @@ class AllocationRequest(BaseModel):
     full_range: bool = Field(False, description="Quando true, faz alocacao Full Range com split 50/50 em valor USD.")
     range1: Decimal | None = Field(None, description="Min range value (token1/token0). Obrigatorio quando full_range=false.")
     range2: Decimal | None = Field(None, description="Max range value (token1/token0). Obrigatorio quando full_range=false.")
+    swapped_pair: bool = Field(False, description="Quando true, interpreta a faixa no par invertido.")
 
 
 class AllocationResponse(BaseModel):

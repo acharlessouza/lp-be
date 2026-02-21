@@ -21,6 +21,10 @@ class LiquidityDistributionRequest(BaseModel):
     tick_range: int = Field(..., ge=1, description="Tick range (ex: 6000).")
     range_min: Decimal | None = Field(None, description="Min price range (token1 per token0).")
     range_max: Decimal | None = Field(None, description="Max price range (token1 per token0).")
+    swapped_pair: bool = Field(
+        False,
+        description="Quando true, interpreta entrada e retorna saida no par invertido.",
+    )
 
 
 class LiquidityDistributionPoolResponse(BaseModel):
@@ -59,7 +63,7 @@ class LiquidityDistributionDefaultRangeRequest(BaseModel):
         description="Tick central opcional. Quando informado, substitui o tick atual da pool.",
     )
     swapped_pair: bool = Field(
-        ...,
+        False,
         description="Quando true, calcula e retorna precos no par invertido (1/price).",
     )
 

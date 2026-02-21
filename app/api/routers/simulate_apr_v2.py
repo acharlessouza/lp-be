@@ -47,6 +47,7 @@ def simulate_apr_v2(
                 calculation_method=req.calculation_method,
                 custom_calculation_price=req.custom_calculation_price,
                 apr_method=req.apr_method,
+                swapped_pair=req.swapped_pair,
             )
         )
     except PoolNotFoundError as exc:
@@ -60,14 +61,23 @@ def simulate_apr_v2(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SimulationDataNotFoundError as exc:
         logger.warning(
-            "simulate_apr_v2_router: data_not_found pool=%s chain_id=%s dex_id=%s lookback_days=%s detail=%s",
+            "simulate_apr_v2_router: data_not_found pool=%s chain_id=%s dex_id=%s lookback_days=%s code=%s context=%s detail=%s",
             req.pool_address,
             req.chain_id,
             req.dex_id,
             req.lookback_days,
+            exc.code,
+            exc.context,
             exc,
         )
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": str(exc),
+                "code": exc.code,
+                "context": exc.context,
+            },
+        ) from exc
     except InvalidSimulationInputError as exc:
         logger.warning(
             "simulate_apr_v2_router: invalid_input pool=%s chain_id=%s dex_id=%s detail=%s",

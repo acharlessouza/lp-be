@@ -48,6 +48,17 @@ class InvalidSimulationInputError(DomainError):
 class SimulationDataNotFoundError(DomainError):
     """Dados insuficientes para simular APR."""
 
+    def __init__(
+        self,
+        message: str = "Nao foi possivel realizar a simulacao com os dados disponiveis.",
+        *,
+        code: str = "simulation_data_not_found",
+        context: dict | None = None,
+    ):
+        super().__init__(message)
+        self.code = code
+        self.context = context or {}
+
 
 class PoolVolumeHistoryInputError(DomainError):
     """Parametros invalidos para historico de volume da pool."""
