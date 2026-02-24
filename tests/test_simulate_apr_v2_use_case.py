@@ -11,7 +11,11 @@ from app.application.dto.tick_snapshot_on_demand import (
     MissingTickSnapshot,
     TickSnapshotUpsertRow,
 )
-from app.application.use_cases.simulate_apr_v2 import SimulateAprV2UseCase
+from app.application.use_cases.simulate_apr_v2 import (
+    UNISWAP_V3_MAX_TICK,
+    UNISWAP_V3_MIN_TICK,
+    SimulateAprV2UseCase,
+)
 from app.domain.entities.simulate_apr import SimulateAprInitializedTick
 from app.domain.entities.simulate_apr_v2 import (
     SimulateAprV2Pool,
@@ -699,6 +703,159 @@ def test_execute_price_range_exact_raises_specific_error_when_boundaries_not_sna
     assert exc.value.context["raw_tick_upper"] == 11
     assert exc.value.context["snapped_tick_lower"] == -20
     assert exc.value.context["snapped_tick_upper"] == 20
+    assert exc.value.context["adjusted_tick_lower"] is None
+    assert exc.value.context["adjusted_tick_upper"] is None
+    assert "missing" in exc.value.context
+
+
+def test_resolve_range_ticks_full_range_uses_uniswap_math_bounds(base_input: SimulateAprV2Input):
+    apr_port = FakeSimulateAprV2Port()
+    use_case = _make_use_case(
+        apr_port=apr_port,
+        on_demand_port=FakeTickSnapshotOnDemandPort(apr_port=apr_port),
+    )
+    pool = apr_port.get_pool(pool_address="0xpool", chain_id=1, dex_id=2)
+    assert pool is not None
+
+    tick_lower, tick_upper = use_case._resolve_range_ticks(
+        command=replace(
+            base_input,
+            full_range=True,
+            tick_lower=None,
+            tick_upper=None,
+            min_price=None,
+            max_price=None,
+        ),
+        pool=pool,
+    )
+
+    assert (tick_lower, tick_upper) == (UNISWAP_V3_MIN_TICK, UNISWAP_V3_MAX_TICK)
+    assert tick_lower != -887280
+    assert tick_upper != 887280
+
+
+def test_execute_full_range_exact_fallbacks_to_initialized_tick_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+    base_input: SimulateAprV2Input,
+):
+    monkeypatch.setattr(
+        "app.application.use_cases.simulate_apr_v2.position_liquidity_v3",
+        lambda **_: Decimal("10"),
+    )
+    apr_port = FakeSimulateAprV2Port()
+    on_demand_port = FakeTickSnapshotOnDemandPort(
+        apr_port=apr_port,
+        return_empty_fetch=True,
+    )
+    use_case = _make_use_case(apr_port=apr_port, on_demand_port=on_demand_port)
+
+    boundary_attempts: list[tuple[int, int]] = []
+    original_ensure = use_case._ensure_tick_snapshots_present
+
+    def _capture_ensure(**kwargs):
+        tick_indices = kwargs["tick_indices"]
+        boundary_attempts.append((int(tick_indices[0]), int(tick_indices[1])))
+        return original_ensure(**kwargs)
+
+    monkeypatch.setattr(use_case, "_ensure_tick_snapshots_present", _capture_ensure)
+
+    result = use_case.execute(
+        replace(
+            base_input,
+            full_range=True,
+            tick_lower=None,
+            tick_upper=None,
+            min_price=None,
+            max_price=None,
+            calculation_method="custom",
+            custom_calculation_price=Decimal("2"),
+        )
+    )
+
+    assert result.estimated_fees_period_usd > Decimal("0")
+    assert boundary_attempts[0] == (UNISWAP_V3_MIN_TICK, UNISWAP_V3_MAX_TICK)
+    assert boundary_attempts[1] == (-10, 10)
+    assert -887280 not in {tick for pair in boundary_attempts for tick in pair}
+    assert 887280 not in {tick for pair in boundary_attempts for tick in pair}
+
+
+@pytest.mark.parametrize(
+    "calculation_method",
+    ["avg_liquidity_in_range", "peak_liquidity_in_range"],
+)
+def test_execute_full_range_with_liquidity_in_range_method_falls_back_to_current(
+    monkeypatch: pytest.MonkeyPatch,
+    base_input: SimulateAprV2Input,
+    calculation_method: str,
+):
+    monkeypatch.setattr(
+        "app.application.use_cases.simulate_apr_v2.position_liquidity_v3",
+        lambda **_: Decimal("10"),
+    )
+    apr_port = FakeSimulateAprV2Port()
+    use_case = _make_use_case(
+        apr_port=apr_port,
+        on_demand_port=FakeTickSnapshotOnDemandPort(apr_port=apr_port),
+    )
+
+    captured_method: dict[str, str] = {}
+    original_resolve_calculation_price = use_case._resolve_calculation_price
+
+    def _capture_resolve_calculation_price(*, command, **kwargs):
+        captured_method["value"] = command.calculation_method
+        return original_resolve_calculation_price(command=command, **kwargs)
+
+    monkeypatch.setattr(use_case, "_resolve_calculation_price", _capture_resolve_calculation_price)
+
+    result = use_case.execute(
+        replace(
+            base_input,
+            full_range=True,
+            calculation_method=calculation_method,
+            custom_calculation_price=None,
+        )
+    )
+
+    assert result.estimated_fees_period_usd > Decimal("0")
+    assert captured_method["value"] == "current"
+
+
+def test_execute_full_range_exact_raises_specific_error_when_boundaries_not_snapshotable(
+    base_input: SimulateAprV2Input,
+):
+    apr_port = FakeSimulateAprV2Port(initialized_ticks=[])
+    use_case = _make_use_case(
+        apr_port=apr_port,
+        on_demand_port=FakeTickSnapshotOnDemandPort(
+            apr_port=apr_port,
+            return_empty_fetch=True,
+            initialized_ticks_rows=[],
+        ),
+    )
+
+    with pytest.raises(SimulationDataNotFoundError) as exc:
+        use_case.execute(
+            replace(
+                base_input,
+                full_range=True,
+                tick_lower=None,
+                tick_upper=None,
+                min_price=None,
+                max_price=None,
+                calculation_method="custom",
+                custom_calculation_price=Decimal("2"),
+            )
+        )
+
+    assert exc.value.code == "full_range_boundaries_not_snapshotable"
+    assert exc.value.context["range_mode"] == "full_range"
+    assert exc.value.context["pool_address"] == "0xpool"
+    assert exc.value.context["chain_id"] == 1
+    assert exc.value.context["dex_id"] == 2
+    assert exc.value.context["raw_tick_lower"] == UNISWAP_V3_MIN_TICK
+    assert exc.value.context["raw_tick_upper"] == UNISWAP_V3_MAX_TICK
+    assert exc.value.context["snapped_tick_lower"] == UNISWAP_V3_MIN_TICK
+    assert exc.value.context["snapped_tick_upper"] == UNISWAP_V3_MAX_TICK
     assert exc.value.context["adjusted_tick_lower"] is None
     assert exc.value.context["adjusted_tick_upper"] is None
     assert "missing" in exc.value.context

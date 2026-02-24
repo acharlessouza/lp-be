@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextvars import ContextVar
+from dataclasses import replace
 import logging
 import re
 from decimal import Decimal
@@ -131,6 +132,19 @@ class SimulateAprV2UseCase:
                     raise InvalidSimulationInputError(
                         "custom_calculation_price must be provided and > 0 when calculation_method=custom."
                     )
+            if canonical_command.full_range and calculation_method in {
+                "avg_liquidity_in_range",
+                "peak_liquidity_in_range",
+            }:
+                logger.info(
+                    "simulate_apr_v2: full_range_incompatible_calculation_method_fallback pool=%s chain_id=%s dex_id=%s requested_method=%s fallback_method=current",
+                    canonical_command.pool_address,
+                    canonical_command.chain_id,
+                    canonical_command.dex_id,
+                    calculation_method,
+                )
+                canonical_command = replace(canonical_command, calculation_method="current")
+                calculation_method = "current"
 
             if (
                 canonical_command.deposit_usd is None
@@ -533,8 +547,8 @@ class SimulateAprV2UseCase:
             if tick_spacing is None or tick_spacing <= 0:
                 raise InvalidSimulationInputError("tick_spacing must be available and > 0 for full_range simulation.")
 
-            tick_lower = (UNISWAP_V3_MIN_TICK // tick_spacing) * tick_spacing
-            tick_upper = ((UNISWAP_V3_MAX_TICK + tick_spacing - 1) // tick_spacing) * tick_spacing
+            tick_lower = UNISWAP_V3_MIN_TICK
+            tick_upper = UNISWAP_V3_MAX_TICK
             if tick_lower >= tick_upper:
                 raise InvalidSimulationInputError("Invalid full range ticks computed for this pool.")
             return tick_lower, tick_upper
@@ -603,6 +617,12 @@ class SimulateAprV2UseCase:
             return tick_lower, tick_upper
 
         range_from_price = self._is_price_range_input(command)
+        range_is_full = bool(command.full_range)
+        can_adjust_boundaries_to_snapshotable = range_from_price or range_is_full
+        range_mode = "price_range" if range_from_price else ("full_range" if range_is_full else "ticks")
+        boundary_error_code = (
+            "price_range_boundaries_not_snapshotable" if range_from_price else "full_range_boundaries_not_snapshotable"
+        )
         raw_tick_lower = tick_lower
         raw_tick_upper = tick_upper
         snapped_tick_lower = tick_lower
@@ -636,7 +656,7 @@ class SimulateAprV2UseCase:
             )
             return tick_lower, tick_upper
         except SimulationDataNotFoundError as exc:
-            if not range_from_price or exc.code != "tick_snapshots_missing_after_on_demand":
+            if not can_adjust_boundaries_to_snapshotable or exc.code != "tick_snapshots_missing_after_on_demand":
                 raise
 
             initial_missing = exc.context.get("missing")
@@ -649,10 +669,11 @@ class SimulateAprV2UseCase:
             )
             if adjusted is None:
                 self._raise_data_not_found(
-                    "price_range_boundaries_not_snapshotable",
+                    boundary_error_code,
                     pool_address=pool_address,
                     chain_id=chain_id,
                     dex_id=dex_id,
+                    range_mode=range_mode,
                     raw_tick_lower=raw_tick_lower,
                     raw_tick_upper=raw_tick_upper,
                     snapped_tick_lower=snapped_tick_lower,
@@ -664,11 +685,21 @@ class SimulateAprV2UseCase:
 
             adjusted_tick_lower, adjusted_tick_upper = adjusted
             logger.info(
-                "simulate_apr_v2: exact_boundary_adjusted_to_initialized lower_before=%s upper_before=%s lower_after=%s upper_after=%s",
+                "simulate_apr_v2: exact_boundary_adjusted_to_initialized range_mode=%s lower_before=%s upper_before=%s lower_after=%s upper_after=%s",
+                range_mode,
                 tick_lower,
                 tick_upper,
                 adjusted_tick_lower,
                 adjusted_tick_upper,
+            )
+            logger.info(
+                "simulate_apr_v2: exact_boundary_retry_after_adjustment range_mode=%s pool=%s chain_id=%s dex_id=%s blocks=%s ticks=%s",
+                range_mode,
+                pool_address,
+                chain_id,
+                dex_id,
+                block_numbers,
+                [adjusted_tick_lower, adjusted_tick_upper],
             )
 
             try:
@@ -684,10 +715,11 @@ class SimulateAprV2UseCase:
                 if adjusted_exc.code != "tick_snapshots_missing_after_on_demand":
                     raise
                 self._raise_data_not_found(
-                    "price_range_boundaries_not_snapshotable",
+                    boundary_error_code,
                     pool_address=pool_address,
                     chain_id=chain_id,
                     dex_id=dex_id,
+                    range_mode=range_mode,
                     raw_tick_lower=raw_tick_lower,
                     raw_tick_upper=raw_tick_upper,
                     snapped_tick_lower=snapped_tick_lower,
