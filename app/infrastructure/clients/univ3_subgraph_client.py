@@ -35,6 +35,10 @@ class SubgraphResolutionError(RuntimeError):
     pass
 
 
+class SubgraphPaginationDriftError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class Univ3SubgraphClientSettings:
     graph_gateway_base: str
@@ -169,9 +173,7 @@ class Univ3SubgraphClient:
         subgraph_url = self._resolve_subgraph_url(chain_id)
         pool_id = pool_address.lower()
         page_size = 1000
-        last_tick = min_tick - 1
         use_sem_growth = chain_id == 42161
-        result: list[InitializedTickSourceRow] = []
 
         query_ticks = """
         query InitializedTicksInRange($poolId: ID!, $lastTick: Int!, $maxTick: Int!, $pageSize: Int!) {
@@ -210,60 +212,120 @@ class Univ3SubgraphClient:
         }
         """
 
-        pages = 0
-        while True:
-            payload = self._post_graphql(
-                url=subgraph_url,
-                query=query_ticks_sem_growth if use_sem_growth else query_ticks,
-                variables={
-                    "poolId": pool_id,
-                    "lastTick": int(last_tick),
-                    "maxTick": int(max_tick),
-                    "pageSize": page_size,
-                },
-            )
-            rows = payload.get("data", {}).get("ticks") or []
-            if not rows:
-                break
-            pages += 1
-            meta_block = (payload.get("data", {}).get("_meta") or {}).get("block") or {}
-            updated_at_block = meta_block.get("number")
+        attempts = max(1, self._settings.max_retries)
+        delay = 0.25
+        last_exc: Exception | None = None
+        active_query = query_ticks_sem_growth if use_sem_growth else query_ticks
 
-            for row in rows:
-                tick_idx = row.get("tickIdx")
-                if tick_idx is None:
-                    continue
-                result.append(
-                    InitializedTickSourceRow(
-                        tick_idx=int(tick_idx),
-                        liquidity_net=row.get("liquidityNet"),
-                        liquidity_gross=row.get("liquidityGross"),
-                        price0=row.get("price0"),
-                        price1=row.get("price1"),
-                        fee_growth_outside0_x128=row.get("feeGrowthOutside0X128"),
-                        fee_growth_outside1_x128=row.get("feeGrowthOutside1X128"),
-                        updated_at_block=int(updated_at_block) if updated_at_block is not None else None,
+        for fetch_attempt in range(1, attempts + 1):
+            last_tick = min_tick - 1
+            result: list[InitializedTickSourceRow] = []
+            pages = 0
+            meta_blocks_seen: list[int] = []
+            meta_block_missing_pages = 0
+            expected_meta_block: int | None = None
+
+            try:
+                while True:
+                    payload = self._post_graphql(
+                        url=subgraph_url,
+                        query=active_query,
+                        variables={
+                            "poolId": pool_id,
+                            "lastTick": int(last_tick),
+                            "maxTick": int(max_tick),
+                            "pageSize": page_size,
+                        },
                     )
+                    rows = payload.get("data", {}).get("ticks") or []
+                    if not rows:
+                        break
+                    pages += 1
+                    meta_block = (payload.get("data", {}).get("_meta") or {}).get("block") or {}
+                    raw_meta_block = meta_block.get("number")
+                    updated_at_block = int(raw_meta_block) if raw_meta_block is not None else None
+                    if updated_at_block is None:
+                        meta_block_missing_pages += 1
+                    else:
+                        if expected_meta_block is None:
+                            expected_meta_block = updated_at_block
+                        elif updated_at_block != expected_meta_block:
+                            logger.warning(
+                                "univ3_subgraph_client: initialized_ticks_pagination_drift pool=%s chain_id=%s min_tick=%s max_tick=%s page=%s prev_meta_block=%s new_meta_block=%s last_tick=%s",
+                                pool_id,
+                                chain_id,
+                                min_tick,
+                                max_tick,
+                                pages,
+                                expected_meta_block,
+                                updated_at_block,
+                                last_tick,
+                            )
+                            raise SubgraphPaginationDriftError(
+                                "Subgraph pagination drift: meta block changed "
+                                f"from {expected_meta_block} to {updated_at_block}"
+                            )
+                        meta_blocks_seen.append(updated_at_block)
+
+                    for row in rows:
+                        tick_idx = row.get("tickIdx")
+                        if tick_idx is None:
+                            continue
+                        result.append(
+                            InitializedTickSourceRow(
+                                tick_idx=int(tick_idx),
+                                liquidity_net=row.get("liquidityNet"),
+                                liquidity_gross=row.get("liquidityGross"),
+                                price0=row.get("price0"),
+                                price1=row.get("price1"),
+                                fee_growth_outside0_x128=row.get("feeGrowthOutside0X128"),
+                                fee_growth_outside1_x128=row.get("feeGrowthOutside1X128"),
+                                updated_at_block=updated_at_block,
+                            )
+                        )
+
+                    last_row_tick = rows[-1].get("tickIdx")
+                    if last_row_tick is None:
+                        break
+                    last_tick = int(last_row_tick)
+                    if len(rows) < page_size:
+                        break
+            except SubgraphPaginationDriftError as exc:
+                last_exc = exc
+                if fetch_attempt == attempts:
+                    break
+                logger.warning(
+                    "univ3_subgraph_client: initialized_ticks_retry attempt=%s/%s reason=pagination_drift error=%s",
+                    fetch_attempt,
+                    attempts,
+                    exc,
                 )
+                time.sleep(delay)
+                delay *= 2
+                continue
 
-            last_row_tick = rows[-1].get("tickIdx")
-            if last_row_tick is None:
-                break
-            last_tick = int(last_row_tick)
-            if len(rows) < page_size:
-                break
+            meta_block_first = meta_blocks_seen[0] if meta_blocks_seen else None
+            meta_block_min = min(meta_blocks_seen) if meta_blocks_seen else None
+            meta_block_max = max(meta_blocks_seen) if meta_blocks_seen else None
+            logger.info(
+                "univ3_subgraph_client: fetched_initialized_ticks fetched=%s pages=%s pool=%s chain_id=%s min_tick=%s max_tick=%s mode=%s meta_block_first=%s meta_block_min=%s meta_block_max=%s meta_block_missing_pages=%s",
+                len(result),
+                pages,
+                pool_id,
+                chain_id,
+                min_tick,
+                max_tick,
+                "sem_growth" if use_sem_growth else "default",
+                meta_block_first,
+                meta_block_min,
+                meta_block_max,
+                meta_block_missing_pages,
+            )
+            return result
 
-        logger.info(
-            "univ3_subgraph_client: fetched_initialized_ticks fetched=%s pages=%s pool=%s chain_id=%s min_tick=%s max_tick=%s mode=%s",
-            len(result),
-            pages,
-            pool_id,
-            chain_id,
-            min_tick,
-            max_tick,
-            "sem_growth" if use_sem_growth else "default",
-        )
-        return result
+        if last_exc is not None:
+            raise RuntimeError(str(last_exc)) from last_exc
+        return []
 
     def _fetch_tick_at_block(
         self,

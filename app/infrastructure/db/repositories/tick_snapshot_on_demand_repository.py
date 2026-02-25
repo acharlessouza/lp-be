@@ -302,6 +302,15 @@ class SqlTickSnapshotOnDemandRepository(TickSnapshotOnDemandPort):
         ]
         if "updated_at" in columns:
             updates.append("updated_at = now()")
+        conflict_where = ""
+        if "updated_at_block" in insert_columns:
+            conflict_where = """
+            WHERE public.pool_ticks_initialized.updated_at_block IS NULL
+               OR (
+                    EXCLUDED.updated_at_block IS NOT NULL
+                    AND EXCLUDED.updated_at_block >= public.pool_ticks_initialized.updated_at_block
+               )
+            """
 
         sql = text(
             f"""
@@ -309,6 +318,7 @@ class SqlTickSnapshotOnDemandRepository(TickSnapshotOnDemandPort):
             VALUES ({values_clause})
             ON CONFLICT (dex_id, chain_id, pool_address, tick_idx)
             DO UPDATE SET {", ".join(updates)}
+            {conflict_where}
             """
         )
 
