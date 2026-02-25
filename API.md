@@ -401,30 +401,25 @@ Entrada:
   "amount_token0": "1.2",
   "amount_token1": "0",
   "full_range": false,
-  "tick_lower": -201000,
-  "tick_upper": -195000,
-  "min_price": null,
-  "max_price": null,
-  "horizon": "7d",
+  "min_price": "2800",
+  "max_price": "3200",
   "lookback_days": 7,
   "calculation_method": "current",
   "custom_calculation_price": null,
-  "apr_method": "exact",
   "swapped_pair": false
 }
 ```
 
 Notas:
 - Endpoint v2 usa metodo exato por bloco (Uniswap v3 `feeGrowthInside`), com snapshot mais recente como bloco `B` e snapshot de lookback como bloco `A`.
-- O range pode ser enviado por:
-  - ticks (`tick_lower`/`tick_upper`), ou
-  - precos (`min_price`/`max_price`) sem ticks.
+- O range deve ser enviado por:
+  - `full_range=true` (sem `min_price`/`max_price`), ou
+  - precos (`min_price`/`max_price`) quando `full_range=false`.
 - Fonte principal: `public.pool_state_snapshots` para estados A/B e `apr_exact.tick_snapshot` para `fee_growth_outside` nos ticks `lower/upper` em A/B.
 - Quando algum tick obrigatorio (A/B x lower/upper) nao existe em `apr_exact.tick_snapshot`, a API dispara um fluxo on-demand: consulta o subgraph somente para os combos faltantes (maximo configuravel, default 4), faz upsert no banco e reprocessa.
 - Guardrails do on-demand: timeout configuravel, retry com backoff exponencial e rate-limit minimo entre chamadas.
 - Se faltarem snapshots/ticks obrigatorios ou o range for inviavel para simulacao, retorna erro explicito (`422`) com codigo e contexto de diagnostico.
 - Quando `swapped_pair=true`:
-  - ticks de entrada sao convertidos para canonical (`tick_lower=-tick_upper_ui`, `tick_upper=-tick_lower_ui`)
   - preco de entrada (`min_price/max_price` e `custom_calculation_price`) e convertido para canonical (`1/max`, `1/min`, `1/custom`)
   - `amount_token0/amount_token1` sao trocados antes do calculo
   - `meta.used_price` e devolvido no referencial da UI (`1/used_price_canonical`)

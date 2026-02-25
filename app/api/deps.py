@@ -43,6 +43,9 @@ from app.infrastructure.db.repositories.liquidity_distribution_repository import
 )
 from app.infrastructure.db.repositories.match_ticks_repository import SqlMatchTicksRepository
 from app.infrastructure.db.repositories.pool_price_repository import SqlPoolPriceRepository
+from app.infrastructure.db.repositories.pool_runtime_metadata_repository import (
+    SqlPoolRuntimeMetadataRepository,
+)
 from app.infrastructure.db.repositories.pool_volume_history_repository import (
     SqlPoolVolumeHistoryRepository,
 )
@@ -172,6 +175,7 @@ def get_simulate_apr_v2_use_case() -> SimulateAprV2UseCase:
             db_engine,
             subgraph_client=_get_univ3_subgraph_client(),
         ),
+        pool_runtime_metadata_port=SqlPoolRuntimeMetadataRepository(db_engine),
         max_on_demand_combinations=settings.graph_on_demand_max_combinations,
     )
 

@@ -14,6 +14,7 @@ from app.application.dto.simulate_apr_v2 import (
     SimulateAprV2Output,
 )
 from app.application.dto.tick_snapshot_on_demand import InitializedTickSourceRow, MissingTickSnapshot
+from app.application.ports.pool_runtime_metadata_port import PoolRuntimeMetadataPort
 from app.application.ports.simulate_apr_v2_port import SimulateAprV2Port
 from app.application.ports.tick_snapshot_on_demand_port import TickSnapshotOnDemandPort
 from app.domain.entities.simulate_apr import SimulateAprInitializedTick
@@ -75,10 +76,12 @@ class SimulateAprV2UseCase:
         *,
         simulate_apr_v2_port: SimulateAprV2Port,
         tick_snapshot_on_demand_port: TickSnapshotOnDemandPort,
+        pool_runtime_metadata_port: PoolRuntimeMetadataPort | None = None,
         max_on_demand_combinations: int = 4,
     ):
         self._simulate_apr_v2_port = simulate_apr_v2_port
         self._tick_snapshot_on_demand_port = tick_snapshot_on_demand_port
+        self._pool_runtime_metadata_port = pool_runtime_metadata_port
         self._max_on_demand_combinations = max(1, max_on_demand_combinations)
 
     def execute(self, command: SimulateAprV2Input) -> SimulateAprV2Output:
@@ -174,6 +177,11 @@ class SimulateAprV2UseCase:
             )
             if pool is None:
                 raise PoolNotFoundError("Pool not found.")
+            self._track_pool_activity_best_effort(
+                pool_address=pool_address,
+                chain_id=canonical_command.chain_id,
+                dex_id=canonical_command.dex_id,
+            )
 
             tick_lower, tick_upper = self._resolve_range_ticks(command=canonical_command, pool=pool)
 
@@ -1003,6 +1011,16 @@ class SimulateAprV2UseCase:
                     exc,
                 )
         elapsed_ms = (perf_counter() - start) * 1000
+        self._track_ticks_window_refresh_state_best_effort(
+            pool_address=pool_address,
+            chain_id=chain_id,
+            dex_id=dex_id,
+            window_ticks=max_tick - min_tick,
+            center_tick=(min_tick + max_tick) // 2,
+            last_pool_tick=None,
+            last_block_number=None,
+            source="simulate_apr_v2",
+        )
         logger.info(
             "simulate_apr_v2: initialized_ticks_on_demand_end pool=%s chain_id=%s dex_id=%s fetched=%s elapsed_ms=%.2f",
             pool_address,
@@ -1012,6 +1030,67 @@ class SimulateAprV2UseCase:
             elapsed_ms,
         )
         return rows
+
+    def _track_pool_activity_best_effort(
+        self,
+        *,
+        pool_address: str,
+        chain_id: int,
+        dex_id: int,
+    ) -> None:
+        if self._pool_runtime_metadata_port is None:
+            return
+        try:
+            self._pool_runtime_metadata_port.upsert_pool_activity(
+                pool_address=pool_address,
+                chain_id=chain_id,
+                dex_id=dex_id,
+            )
+        except Exception as exc:
+            logger.debug(
+                "simulate_apr_v2: pool_activity_upsert_failed pool=%s chain_id=%s dex_id=%s error=%s",
+                pool_address,
+                chain_id,
+                dex_id,
+                exc,
+            )
+
+    def _track_ticks_window_refresh_state_best_effort(
+        self,
+        *,
+        pool_address: str,
+        chain_id: int,
+        dex_id: int,
+        window_ticks: int,
+        center_tick: int | None,
+        last_pool_tick: int | None,
+        last_block_number: int | None,
+        source: str,
+    ) -> None:
+        if self._pool_runtime_metadata_port is None:
+            return
+        if window_ticks <= 0:
+            return
+        try:
+            self._pool_runtime_metadata_port.upsert_pool_ticks_window_refresh_state(
+                pool_address=pool_address,
+                chain_id=chain_id,
+                dex_id=dex_id,
+                window_ticks=window_ticks,
+                center_tick=center_tick,
+                last_pool_tick=last_pool_tick,
+                last_block_number=last_block_number,
+                source=source,
+            )
+        except Exception as exc:
+            logger.debug(
+                "simulate_apr_v2: ticks_window_refresh_state_upsert_failed pool=%s chain_id=%s dex_id=%s window_ticks=%s error=%s",
+                pool_address,
+                chain_id,
+                dex_id,
+                window_ticks,
+                exc,
+            )
 
     def _map_initialized_tick_rows(
         self,

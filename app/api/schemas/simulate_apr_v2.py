@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -16,12 +15,9 @@ class SimulateAprV2Request(BaseModel):
 
     full_range: bool = Field(False, description="Quando true, simula a posicao Full Range (Uniswap V3).")
 
-    tick_lower: int | None = Field(None, description="Tick inferior da faixa.")
-    tick_upper: int | None = Field(None, description="Tick superior da faixa.")
-    min_price: Decimal | None = Field(None, description="Preco minimo token1/token0.")
-    max_price: Decimal | None = Field(None, description="Preco maximo token1/token0.")
+    min_price: Decimal | None = Field(None, description="Preco minimo token1/token0 (usar quando full_range=false).")
+    max_price: Decimal | None = Field(None, description="Preco maximo token1/token0 (usar quando full_range=false).")
 
-    horizon: str = Field("7d", description="Horizonte dinamico (ex.: 24h, 7d, 14d, 30d).")
     lookback_days: int = Field(7, ge=1, description="Dias de lookback para escolher snapshots A e B.")
     calculation_method: str = Field(
         "current",
@@ -31,7 +27,6 @@ class SimulateAprV2Request(BaseModel):
         None,
         description="Preco customizado (obrigatorio quando calculation_method=custom).",
     )
-    apr_method: Literal["exact"] = Field("exact", description="Metodo de APR; v2 suporta apenas exact.")
     swapped_pair: bool = Field(False, description="Quando true, interpreta/retorna dados no par invertido.")
 
 
