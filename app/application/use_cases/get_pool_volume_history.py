@@ -10,6 +10,7 @@ from app.application.dto.pool_volume_history import (
 )
 from app.application.ports.pool_volume_history_port import PoolVolumeHistoryPort
 from app.domain.exceptions import PoolVolumeHistoryInputError
+from app.domain.services.pool_summary import calculate_daily_tvl_pct
 
 
 class GetPoolVolumeHistoryUseCase:
@@ -55,13 +56,14 @@ class GetPoolVolumeHistoryUseCase:
             dex_id=command.dex_id,
         )
 
-        daily_fees_tvl_pct: Decimal | None = None
-        daily_volume_tvl_pct: Decimal | None = None
-        if base.tvl_usd is not None and base.tvl_usd > 0:
-            if avg_daily_fees_usd is not None:
-                daily_fees_tvl_pct = (avg_daily_fees_usd / base.tvl_usd) * Decimal("100")
-            if avg_daily_volume_usd is not None:
-                daily_volume_tvl_pct = (avg_daily_volume_usd / base.tvl_usd) * Decimal("100")
+        daily_fees_tvl_pct = calculate_daily_tvl_pct(
+            avg_daily_usd=avg_daily_fees_usd,
+            tvl_usd=base.tvl_usd,
+        )
+        daily_volume_tvl_pct = calculate_daily_tvl_pct(
+            avg_daily_usd=avg_daily_volume_usd,
+            tvl_usd=base.tvl_usd,
+        )
 
         price_volatility_pct: Decimal | None = None
         correlation: Decimal | None = None

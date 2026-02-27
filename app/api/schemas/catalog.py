@@ -6,17 +6,20 @@ from pydantic import BaseModel
 class ExchangeResponse(BaseModel):
     id: int
     name: str
+    icon_url: str | None = None
 
 
 class NetworkResponse(BaseModel):
     id: int
     name: str
+    icon_url: str | None = None
 
 
 class TokenResponse(BaseModel):
     address: str
     symbol: str
     decimals: int
+    icon_url: str | None = None
 
 
 class PoolSummaryResponse(BaseModel):

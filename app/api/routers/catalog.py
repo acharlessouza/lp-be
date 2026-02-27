@@ -43,7 +43,7 @@ def list_exchanges(
     use_case: ListExchangesUseCase = Depends(get_list_exchanges_use_case),
 ):
     rows = use_case.execute()
-    return [ExchangeResponse(id=row.id, name=row.name) for row in rows]
+    return [ExchangeResponse(id=row.id, name=row.name, icon_url=row.icon_url) for row in rows]
 
 
 @router.get("/v1/exchanges/{exchange_id}/networks", response_model=list[NetworkResponse])
@@ -53,7 +53,7 @@ def list_exchange_networks(
     use_case: ListExchangeNetworksUseCase = Depends(get_list_exchange_networks_use_case),
 ):
     rows = use_case.execute(ListExchangeNetworksInput(exchange_id=exchange_id))
-    return [NetworkResponse(id=row.id, name=row.name) for row in rows]
+    return [NetworkResponse(id=row.id, name=row.name, icon_url=row.icon_url) for row in rows]
 
 
 @router.get(
@@ -74,7 +74,15 @@ def list_exchange_network_tokens(
             token_address=token,
         )
     )
-    return [TokenResponse(address=row.address, symbol=row.symbol, decimals=row.decimals) for row in rows]
+    return [
+        TokenResponse(
+            address=row.address,
+            symbol=row.symbol,
+            decimals=row.decimals,
+            icon_url=row.icon_url,
+        )
+        for row in rows
+    ]
 
 
 @router.get(

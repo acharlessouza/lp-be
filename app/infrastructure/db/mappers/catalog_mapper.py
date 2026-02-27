@@ -7,15 +7,28 @@ from app.domain.entities.catalog import Exchange, Network, PoolDetail, PoolSumma
 
 
 def map_row_to_exchange(row: Mapping[str, Any]) -> Exchange:
-    return Exchange(id=row["id"], name=row["name"])
+    return Exchange(
+        id=row["id"],
+        name=row["name"],
+        icon_url=row.get("icon_url"),
+    )
 
 
 def map_row_to_network(row: Mapping[str, Any]) -> Network:
-    return Network(id=row["id"], name=row["name"])
+    return Network(
+        id=row["id"],
+        name=row["name"],
+        icon_url=row.get("icon_url"),
+    )
 
 
 def map_row_to_token(row: Mapping[str, Any]) -> Token:
-    return Token(address=row["address"], symbol=row["symbol"], decimals=row["decimals"])
+    return Token(
+        address=row["address"],
+        symbol=row["symbol"],
+        decimals=row["decimals"],
+        icon_url=row.get("icon_url"),
+    )
 
 
 def map_row_to_pool_summary(row: Mapping[str, Any]) -> PoolSummary:

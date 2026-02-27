@@ -482,8 +482,8 @@ Notas:
 Resposta:
 ```json
 [
-  { "id": 1, "name": "uniswap" },
-  { "id": 2, "name": "sushiswap" }
+  { "id": 1, "name": "uniswap", "icon_url": "https://..." },
+  { "id": 2, "name": "sushiswap", "icon_url": null }
 ]
 ```
 
@@ -491,8 +491,8 @@ Resposta:
 Resposta:
 ```json
 [
-  { "id": 1, "name": "ethereum" },
-  { "id": 2, "name": "arbitrum" }
+  { "id": 1, "name": "ethereum", "icon_url": "https://..." },
+  { "id": 2, "name": "arbitrum", "icon_url": null }
 ]
 ```
 
@@ -503,8 +503,8 @@ Query params (opcional):
 Resposta:
 ```json
 [
-  { "address": "0x...", "symbol": "WETH", "decimals": 18 },
-  { "address": "0x...", "symbol": "USDC", "decimals": 6 }
+  { "address": "0x...", "symbol": "WETH", "decimals": 18, "icon_url": "https://..." },
+  { "address": "0x...", "symbol": "USDC", "decimals": 6, "icon_url": null }
 ]
 ```
 

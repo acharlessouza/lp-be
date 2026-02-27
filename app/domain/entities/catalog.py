@@ -7,12 +7,14 @@ from dataclasses import dataclass
 class Exchange:
     id: int
     name: str
+    icon_url: str | None
 
 
 @dataclass(frozen=True)
 class Network:
     id: int
     name: str
+    icon_url: str | None
 
 
 @dataclass(frozen=True)
@@ -20,6 +22,7 @@ class Token:
     address: str
     symbol: str
     decimals: int
+    icon_url: str | None
 
 
 @dataclass(frozen=True)

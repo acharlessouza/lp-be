@@ -24,7 +24,8 @@ class SqlCatalogQueryRepository(CatalogQueryPort):
         sql = """
             SELECT DISTINCT
                 d.dex_id AS id,
-                d.name
+                d.name,
+                d.icon_url AS icon_url
             FROM public.dexes d
             JOIN public.pools p
               ON p.dex_id = d.dex_id
@@ -39,7 +40,8 @@ class SqlCatalogQueryRepository(CatalogQueryPort):
         sql = """
             SELECT DISTINCT
                 c.chain_id AS id,
-                c.name
+                c.name,
+                c.icon_url AS icon_url
             FROM public.chains c
             JOIN public.pools p
               ON p.chain_id = c.chain_id
@@ -66,7 +68,8 @@ class SqlCatalogQueryRepository(CatalogQueryPort):
             SELECT DISTINCT
                 token_address AS address,
                 COALESCE(t.symbol, token_address) AS symbol,
-                COALESCE(t.decimals, 0) AS decimals
+                COALESCE(t.decimals, 0) AS decimals,
+                t.icon_url AS icon_url
             FROM (
                 SELECT
                     p.token0_address AS token_address
