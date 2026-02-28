@@ -23,24 +23,37 @@ class LoginLocalUseCase:
 
     def execute(self, command: LoginLocalInput) -> AuthTokensOutput:
         email = normalize_email(command.email)
-        result = self._auth_port.get_local_identity_by_email(email=email)
-        if result is None:
-            raise InvalidCredentialsError("Invalid credentials.")
+        def _tx(auth_port: AuthPort) -> AuthTokensOutput:
+            result = auth_port.get_local_identity_by_email(email=email)
+            if result is None:
+                raise InvalidCredentialsError("Invalid credentials.")
 
-        user, identity = result
-        if not identity.password_hash:
-            raise InvalidCredentialsError("Invalid credentials.")
+            user, identity = result
+            if not identity.password_hash:
+                raise InvalidCredentialsError("Invalid credentials.")
 
-        if not self._password_hasher.verify(command.password, identity.password_hash):
-            raise InvalidCredentialsError("Invalid credentials.")
+            verified, replacement_hash = self._password_hasher.verify_and_update(
+                command.password,
+                identity.password_hash,
+            )
+            if not verified:
+                raise InvalidCredentialsError("Invalid credentials.")
 
-        if not user.is_active:
-            raise UserInactiveError("User is inactive.")
+            if replacement_hash:
+                auth_port.update_identity_password_hash(
+                    identity_id=identity.id,
+                    password_hash=replacement_hash,
+                )
 
-        return issue_tokens(
-            user=user,
-            auth_port=self._auth_port,
-            token_port=self._token_port,
-            user_agent=command.user_agent,
-            ip=command.ip,
-        )
+            if not user.is_active:
+                raise UserInactiveError("User is inactive.")
+
+            return issue_tokens(
+                user=user,
+                auth_port=auth_port,
+                token_port=self._token_port,
+                user_agent=command.user_agent,
+                ip=command.ip,
+            )
+
+        return self._auth_port.execute_in_transaction(_tx)

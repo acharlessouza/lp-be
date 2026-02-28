@@ -17,6 +17,9 @@ class FakeAuthPort:
         self.identities: dict[str, AuthIdentity] = {}
         self.sessions: dict[str, AuthSession] = {}
 
+    def execute_in_transaction(self, fn):
+        return fn(self)
+
     def get_user_by_id(self, *, user_id: str) -> User | None:
         return self.users.get(user_id)
 
@@ -102,6 +105,10 @@ class FakeAuthPort:
         identity = self.identities[identity_id]
         self.identities[identity_id] = replace(identity, provider_subject=provider_subject)
 
+    def update_identity_password_hash(self, *, identity_id: str, password_hash: str) -> None:
+        identity = self.identities[identity_id]
+        self.identities[identity_id] = replace(identity, password_hash=password_hash)
+
     def get_local_identity_by_email(self, *, email: str) -> tuple[User, AuthIdentity] | None:
         user = self.get_user_by_email(email=email)
         if user is None:
@@ -153,6 +160,16 @@ class FakePasswordHasher:
 
     def verify(self, plain_password: str, password_hash: str) -> bool:
         return password_hash == f"hashed::{plain_password}"
+
+    def verify_and_update(self, plain_password: str, password_hash: str) -> tuple[bool, str | None]:
+        return self.verify(plain_password, password_hash), None
+
+
+class FakePasswordHasherWithRehash(FakePasswordHasher):
+    def verify_and_update(self, plain_password: str, password_hash: str) -> tuple[bool, str | None]:
+        if not self.verify(plain_password, password_hash):
+            return False, None
+        return True, f"argon2::{plain_password}"
 
 
 class FakeTokenPort:
@@ -257,3 +274,50 @@ def test_login_google_links_existing_user_by_email_and_creates_google_identity()
     )
     assert google_identity is not None
     assert google_identity.provider_subject == "google-sub-1"
+
+
+def test_register_user_accepts_password_longer_than_72_bytes():
+    auth_port = FakeAuthPort()
+    use_case = RegisterUserUseCase(auth_port=auth_port, password_hasher=FakePasswordHasher())
+
+    output = use_case.execute(
+        RegisterUserInput(
+            name="User",
+            email="user@example.com",
+            password="a" * 100,
+        )
+    )
+    assert output.user.email == "user@example.com"
+
+
+def test_login_local_rehashes_legacy_hash_on_successful_login():
+    auth_port = FakeAuthPort()
+    register_use_case = RegisterUserUseCase(auth_port=auth_port, password_hasher=FakePasswordHasher())
+    register_output = register_use_case.execute(
+        RegisterUserInput(name="User", email="user@example.com", password="12345678")
+    )
+    local_identity = auth_port.get_identity_for_user_provider(
+        user_id=register_output.user.id,
+        provider="local",
+    )
+    assert local_identity is not None
+
+    login_use_case = LoginLocalUseCase(
+        auth_port=auth_port,
+        password_hasher=FakePasswordHasherWithRehash(),
+        token_port=FakeTokenPort(),
+    )
+    login_use_case.execute(
+        LoginLocalInput(
+            email="user@example.com",
+            password="12345678",
+            user_agent="pytest",
+            ip="127.0.0.1",
+        )
+    )
+    updated_identity = auth_port.get_identity_for_user_provider(
+        user_id=register_output.user.id,
+        provider="local",
+    )
+    assert updated_identity is not None
+    assert updated_identity.password_hash == "argon2::12345678"

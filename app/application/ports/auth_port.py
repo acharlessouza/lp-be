@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Protocol
+from typing import Callable, Protocol, TypeVar
 
 from app.domain.entities.user import AuthIdentity, AuthProvider, AuthSession, User
 
 
+TAuthResult = TypeVar("TAuthResult")
+
+
 class AuthPort(Protocol):
+    def execute_in_transaction(self, fn: Callable[[AuthPort], TAuthResult]) -> TAuthResult:
+        ...
+
     def get_user_by_id(self, *, user_id: str) -> User | None:
         ...
 
@@ -64,6 +70,9 @@ class AuthPort(Protocol):
         ...
 
     def update_identity_provider_subject(self, *, identity_id: str, provider_subject: str) -> None:
+        ...
+
+    def update_identity_password_hash(self, *, identity_id: str, password_hash: str) -> None:
         ...
 
     def get_local_identity_by_email(self, *, email: str) -> tuple[User, AuthIdentity] | None:

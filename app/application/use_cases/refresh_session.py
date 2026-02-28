@@ -18,27 +18,31 @@ class RefreshSessionUseCase:
         if not token:
             raise RefreshSessionInvalidError("Missing refresh token.")
 
-        now = utcnow()
         refresh_hash = self._token_port.hash_refresh_token(refresh_token=token)
-        session = self._auth_port.get_session_by_refresh_token_hash(refresh_token_hash=refresh_hash)
-        if session is None:
-            raise RefreshSessionInvalidError("Invalid refresh session.")
-        if session.revoked_at is not None:
-            raise RefreshSessionInvalidError("Refresh session already revoked.")
-        if session.expires_at <= now:
-            raise RefreshSessionInvalidError("Refresh session expired.")
 
-        user = self._auth_port.get_user_by_id(user_id=session.user_id)
-        if user is None:
-            raise RefreshSessionInvalidError("User not found for refresh session.")
-        if not user.is_active:
-            raise UserInactiveError("User is inactive.")
+        def _tx(auth_port: AuthPort) -> AuthTokensOutput:
+            now = utcnow()
+            session = auth_port.get_session_by_refresh_token_hash(refresh_token_hash=refresh_hash)
+            if session is None:
+                raise RefreshSessionInvalidError("Invalid refresh session.")
+            if session.revoked_at is not None:
+                raise RefreshSessionInvalidError("Refresh session already revoked.")
+            if session.expires_at <= now:
+                raise RefreshSessionInvalidError("Refresh session expired.")
 
-        self._auth_port.revoke_session(session_id=session.id, revoked_at=now)
-        return issue_tokens(
-            user=user,
-            auth_port=self._auth_port,
-            token_port=self._token_port,
-            user_agent=command.user_agent,
-            ip=command.ip,
-        )
+            user = auth_port.get_user_by_id(user_id=session.user_id)
+            if user is None:
+                raise RefreshSessionInvalidError("User not found for refresh session.")
+            if not user.is_active:
+                raise UserInactiveError("User is inactive.")
+
+            auth_port.revoke_session(session_id=session.id, revoked_at=now)
+            return issue_tokens(
+                user=user,
+                auth_port=auth_port,
+                token_port=self._token_port,
+                user_agent=command.user_agent,
+                ip=command.ip,
+            )
+
+        return self._auth_port.execute_in_transaction(_tx)

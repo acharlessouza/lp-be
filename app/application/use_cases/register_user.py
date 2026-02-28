@@ -32,25 +32,30 @@ class RegisterUserUseCase:
         if len(password) < 8:
             raise ValueError("password must have at least 8 characters.")
 
-        if self._auth_port.get_user_by_email(email=email) is not None:
-            raise EmailAlreadyExistsError("Email already in use.")
+        password_hash = self._password_hasher.hash(password)
 
-        now = utcnow()
-        user = self._auth_port.create_user(
-            user_id=str(uuid4()),
-            name=name,
-            email=email,
-            email_verified=False,
-            is_active=True,
-            created_at=now,
-            updated_at=now,
-        )
-        self._auth_port.create_identity(
-            identity_id=str(uuid4()),
-            user_id=user.id,
-            provider="local",
-            provider_subject=None,
-            password_hash=self._password_hasher.hash(password),
-            created_at=now,
-        )
-        return RegisterUserOutput(user=build_auth_user_output(user))
+        def _tx(auth_port: AuthPort) -> RegisterUserOutput:
+            if auth_port.get_user_by_email(email=email) is not None:
+                raise EmailAlreadyExistsError("Email already in use.")
+
+            now = utcnow()
+            user = auth_port.create_user(
+                user_id=str(uuid4()),
+                name=name,
+                email=email,
+                email_verified=False,
+                is_active=True,
+                created_at=now,
+                updated_at=now,
+            )
+            auth_port.create_identity(
+                identity_id=str(uuid4()),
+                user_id=user.id,
+                provider="local",
+                provider_subject=None,
+                password_hash=password_hash,
+                created_at=now,
+            )
+            return RegisterUserOutput(user=build_auth_user_output(user))
+
+        return self._auth_port.execute_in_transaction(_tx)

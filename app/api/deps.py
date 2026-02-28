@@ -109,10 +109,10 @@ def _get_accounts_repository() -> SqlAccountsRepository:
 
 
 @lru_cache(maxsize=1)
-def _get_password_hasher() -> BcryptPasswordHasher:
-    from app.infrastructure.security.password_hasher import BcryptPasswordHasher
+def _get_password_hasher() -> "PasswordHasher":
+    from app.infrastructure.security.password_hasher import PasswordHasher
 
-    return BcryptPasswordHasher()
+    return PasswordHasher()
 
 
 @lru_cache(maxsize=1)

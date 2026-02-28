@@ -23,6 +23,7 @@ Este projeto deve seguir **Arquitetura Hexagonal (Ports & Adapters)**.
 4. **Trocar query/fonte de dados não pode exigir alterar cálculo**: mudanças de schema, query, joins, import, índices, etc. devem ficar confinadas ao adapter (infra) desde que o contrato (port) seja mantido.
 5. **Toda feature deve nascer já neste padrão**: durante migração pode coexistir código legado, mas todo código novo segue o padrão alvo.
 6. **É proibido usar fallback no fluxo de negócio**: as implementações devem funcionar no **fluxo principal**. Se faltar dado obrigatório, o comportamento correto é falhar explicitamente com erro claro (não degradar para caminho alternativo silencioso).
+7. **Operações de escrita devem ser atômicas**: todo fluxo que execute `insert`, `update` ou `delete` deve rodar dentro de **transação explícita**; se qualquer etapa falhar, deve ocorrer **rollback completo** (nunca commit parcial).
 
 ---
 
@@ -220,6 +221,7 @@ Regras:
 1. Query deve ser isolada (função/método específico), sem lógica de negócio junto.
 2. Transformação row → domain/dto via `mappers/`.
 3. Sem “query espalhada” em múltiplos lugares para o mesmo caso de uso.
+4. Fluxos com escrita (`insert`/`update`/`delete`) devem usar transação fim-a-fim no caso de uso/adapter e garantir rollback em qualquer erro.
 
 ---
 
@@ -268,6 +270,7 @@ Toda atividade (feature/bugfix/refactor) deve vir com:
 - [ ] Cálculo de negócio está único e reutilizável
 - [ ] Mudança de query/fonte não exigiria mexer no cálculo (port estável)
 - [ ] Não foi implementado fallback no fluxo principal; ausência de dado obrigatório retorna erro explícito
+- [ ] Todo fluxo com `insert`/`update`/`delete` está transacional e com rollback garantido em caso de erro
 
 ---
 

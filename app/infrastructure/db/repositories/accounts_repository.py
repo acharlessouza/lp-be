@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime
+from typing import Callable, TypeVar
 from uuid import uuid4
 
 from sqlalchemy import text
@@ -18,9 +20,30 @@ from app.infrastructure.db.mappers.accounts_mapper import (
 )
 
 
+TRepoResult = TypeVar("TRepoResult")
+
+
 class SqlAccountsRepository(AuthPort, EntitlementsPort):
-    def __init__(self, engine):
+    def __init__(self, engine, conn=None):
         self._engine = engine
+        self._conn = conn
+
+    def execute_in_transaction(self, fn: Callable[[AuthPort], TRepoResult]) -> TRepoResult:
+        if self._conn is not None:
+            return fn(self)
+        with self._begin() as conn:
+            tx_repo = SqlAccountsRepository(self._engine, conn=conn)
+            return fn(tx_repo)
+
+    def _connect(self):
+        if self._conn is not None:
+            return nullcontext(self._conn)
+        return self._engine.connect()
+
+    def _begin(self):
+        if self._conn is not None:
+            return nullcontext(self._conn)
+        return self._engine.begin()
 
     def get_user_by_id(self, *, user_id: str):
         sql = """
@@ -29,7 +52,7 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
             WHERE id = :user_id
             LIMIT 1
         """
-        with self._engine.connect() as conn:
+        with self._connect() as conn:
             row = conn.execute(text(sql), {"user_id": user_id}).mappings().first()
         if row is None:
             return None
@@ -42,7 +65,7 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
             WHERE lower(email) = :email
             LIMIT 1
         """
-        with self._engine.connect() as conn:
+        with self._connect() as conn:
             row = conn.execute(text(sql), {"email": email.lower()}).mappings().first()
         if row is None:
             return None
@@ -55,7 +78,7 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
             WHERE stripe_customer_id = :stripe_customer_id
             LIMIT 1
         """
-        with self._engine.connect() as conn:
+        with self._connect() as conn:
             row = conn.execute(text(sql), {"stripe_customer_id": stripe_customer_id}).mappings().first()
         if row is None:
             return None
@@ -89,7 +112,7 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
             "created_at": created_at,
             "updated_at": updated_at,
         }
-        with self._engine.begin() as conn:
+        with self._begin() as conn:
             row = conn.execute(text(sql), params).mappings().one()
         return map_row_to_user(row)
 
@@ -100,7 +123,7 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
                 updated_at = now()
             WHERE id = :user_id
         """
-        with self._engine.begin() as conn:
+        with self._begin() as conn:
             conn.execute(text(sql), {"user_id": user_id, "email_verified": email_verified})
 
     def update_user_stripe_customer_id(self, *, user_id: str, stripe_customer_id: str) -> None:
@@ -110,7 +133,7 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
                 updated_at = now()
             WHERE id = :user_id
         """
-        with self._engine.begin() as conn:
+        with self._begin() as conn:
             conn.execute(
                 text(sql),
                 {
@@ -137,7 +160,7 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
             )
             RETURNING id, user_id, provider, provider_subject, password_hash, created_at
         """
-        with self._engine.begin() as conn:
+        with self._begin() as conn:
             row = conn.execute(
                 text(sql),
                 {
@@ -159,7 +182,7 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
               AND provider = :provider
             LIMIT 1
         """
-        with self._engine.connect() as conn:
+        with self._connect() as conn:
             row = conn.execute(
                 text(sql),
                 {
@@ -179,7 +202,7 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
               AND provider_subject = :provider_subject
             LIMIT 1
         """
-        with self._engine.connect() as conn:
+        with self._connect() as conn:
             row = conn.execute(
                 text(sql),
                 {
@@ -197,12 +220,27 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
             SET provider_subject = :provider_subject
             WHERE id = :identity_id
         """
-        with self._engine.begin() as conn:
+        with self._begin() as conn:
             conn.execute(
                 text(sql),
                 {
                     "identity_id": identity_id,
                     "provider_subject": provider_subject,
+                },
+            )
+
+    def update_identity_password_hash(self, *, identity_id: str, password_hash: str) -> None:
+        sql = """
+            UPDATE public.auth_identities
+            SET password_hash = :password_hash
+            WHERE id = :identity_id
+        """
+        with self._begin() as conn:
+            conn.execute(
+                text(sql),
+                {
+                    "identity_id": identity_id,
+                    "password_hash": password_hash,
                 },
             )
 
@@ -229,7 +267,7 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
               AND i.provider = 'local'
             LIMIT 1
         """
-        with self._engine.connect() as conn:
+        with self._connect() as conn:
             row = conn.execute(text(sql), {"email": email.lower()}).mappings().first()
         if row is None:
             return None
@@ -288,7 +326,7 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
             "ip": ip,
             "created_at": created_at,
         }
-        with self._engine.begin() as conn:
+        with self._begin() as conn:
             row = conn.execute(text(sql), params).mappings().one()
         return map_row_to_auth_session(row)
 
@@ -299,7 +337,7 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
             WHERE refresh_token_hash = :refresh_token_hash
             LIMIT 1
         """
-        with self._engine.connect() as conn:
+        with self._connect() as conn:
             row = conn.execute(
                 text(sql),
                 {
@@ -317,7 +355,7 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
             WHERE id = :session_id
               AND revoked_at IS NULL
         """
-        with self._engine.begin() as conn:
+        with self._begin() as conn:
             conn.execute(text(sql), {"session_id": session_id, "revoked_at": revoked_at})
 
     def get_plan_by_code(self, *, code: str):
@@ -328,7 +366,7 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
               AND is_active = true
             LIMIT 1
         """
-        with self._engine.connect() as conn:
+        with self._connect() as conn:
             row = conn.execute(text(sql), {"code": code}).mappings().first()
         if row is None:
             return None
@@ -342,7 +380,7 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
               AND is_active = true
             LIMIT 1
         """
-        with self._engine.connect() as conn:
+        with self._connect() as conn:
             row = conn.execute(text(sql), {"plan_id": plan_id}).mappings().first()
         if row is None:
             return None
@@ -356,7 +394,7 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
               AND is_active = true
             LIMIT 1
         """
-        with self._engine.connect() as conn:
+        with self._connect() as conn:
             row = conn.execute(text(sql), {"plan_price_id": plan_price_id}).mappings().first()
         if row is None:
             return None
@@ -370,7 +408,7 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
               AND is_active = true
             LIMIT 1
         """
-        with self._engine.connect() as conn:
+        with self._connect() as conn:
             row = conn.execute(
                 text(sql),
                 {
@@ -394,7 +432,7 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
             WHERE pf.plan_id = :plan_id
             ORDER BY f.code
         """
-        with self._engine.connect() as conn:
+        with self._connect() as conn:
             rows = conn.execute(text(sql), {"plan_id": plan_id}).mappings().all()
         return [map_row_to_plan_feature_grant(row) for row in rows]
 
@@ -418,7 +456,7 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
             ORDER BY COALESCE(current_period_end, updated_at) DESC, updated_at DESC
             LIMIT 1
         """
-        with self._engine.connect() as conn:
+        with self._connect() as conn:
             row = conn.execute(text(sql), {"user_id": user_id}).mappings().first()
         if row is None:
             return None
@@ -443,7 +481,7 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
             WHERE external_subscription_id = :subscription_id
             LIMIT 1
         """
-        with self._engine.begin() as conn:
+        with self._begin() as conn:
             existing = conn.execute(
                 text(select_sql),
                 {
@@ -547,7 +585,7 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
                 updated_at = :updated_at
             WHERE external_subscription_id = :external_subscription_id
         """
-        with self._engine.begin() as conn:
+        with self._begin() as conn:
             result = conn.execute(
                 text(sql),
                 {
