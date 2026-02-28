@@ -646,3 +646,155 @@ Resposta:
 - Escopo exato das simulacoes e parametros de entrada.
 - Politica de expiracao/refresh de JWT.
 - Limites de rate e quotas por usuario.
+
+## POST /v1/auth/register
+Request:
+```json
+{
+  "name": "Alice",
+  "email": "alice@example.com",
+  "password": "senha-segura-123"
+}
+```
+
+Resposta `200`:
+```json
+{
+  "user": {
+    "id": "uuid",
+    "name": "Alice",
+    "email": "alice@example.com",
+    "email_verified": false,
+    "is_active": true
+  }
+}
+```
+
+Erros possiveis:
+- `400` payload invalido.
+- `409` email ja cadastrado.
+
+## POST /v1/auth/login
+Request:
+```json
+{
+  "email": "alice@example.com",
+  "password": "senha-segura-123"
+}
+```
+
+Resposta `200`:
+```json
+{
+  "access_token": "jwt",
+  "token_type": "bearer",
+  "access_expires_at": "2026-02-27T20:00:00+00:00",
+  "refresh_expires_at": "2026-03-29T20:00:00+00:00",
+  "user": {
+    "id": "uuid",
+    "name": "Alice",
+    "email": "alice@example.com",
+    "email_verified": false,
+    "is_active": true
+  }
+}
+```
+
+Notas:
+- Refresh token vai em cookie `httpOnly` (`refresh_token`).
+
+Erros possiveis:
+- `401` credenciais invalidas.
+- `403` usuario inativo.
+
+## POST /v1/auth/google
+Request:
+```json
+{
+  "id_token": "google-openid-id-token"
+}
+```
+
+Resposta:
+- Mesmo payload de `/v1/auth/login`.
+
+Erros possiveis:
+- `401` token Google invalido.
+- `403` usuario inativo.
+
+## POST /v1/auth/refresh
+Sem body, usa cookie `refresh_token`.
+
+Resposta:
+- Mesmo payload de `/v1/auth/login`.
+
+Erros possiveis:
+- `401` sessao de refresh invalida/expirada.
+- `403` usuario inativo.
+
+## POST /v1/auth/logout
+Invalida sessao de refresh e remove cookie.
+
+Resposta `200`:
+```json
+{
+  "ok": true
+}
+```
+
+## GET /v1/me
+Headers:
+- `Authorization: Bearer <access_token>`
+
+Resposta `200`:
+```json
+{
+  "user": {
+    "id": "uuid",
+    "name": "Alice",
+    "email": "alice@example.com"
+  },
+  "plan_code": "free",
+  "features": {
+    "charts_advanced": false,
+    "export_csv": false
+  },
+  "limits": {
+    "api_calls": 100
+  }
+}
+```
+
+## POST /v1/billing/checkout-session
+Headers:
+- `Authorization: Bearer <access_token>`
+
+Request:
+```json
+{
+  "plan_price_id": "uuid"
+}
+```
+
+Resposta `200`:
+```json
+{
+  "checkout_session_id": "cs_test_...",
+  "checkout_url": "https://checkout.stripe.com/..."
+}
+```
+
+Erros possiveis:
+- `400` plano/preco invalido.
+- `500` falta de config `STRIPE_SUCCESS_URL`/`STRIPE_CANCEL_URL`.
+
+## POST /v1/billing/webhook
+Sem auth. Recebe payload bruto da Stripe com header `Stripe-Signature`.
+
+Resposta `200`:
+```json
+{
+  "event_type": "customer.subscription.updated",
+  "handled": true
+}
+```

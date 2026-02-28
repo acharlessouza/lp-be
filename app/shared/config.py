@@ -39,6 +39,14 @@ class Settings:
     graph_on_demand_min_interval_ms: int
     graph_on_demand_max_combinations: int
     pool_min_tvl_usd: Decimal
+    jwt_secret: str
+    jwt_access_ttl_minutes: int
+    jwt_refresh_ttl_days: int
+    google_client_id: str
+    stripe_secret_key: str
+    stripe_webhook_secret: str
+    stripe_success_url: str
+    stripe_cancel_url: str
 
 
 def get_settings() -> Settings:
@@ -72,4 +80,12 @@ def get_settings() -> Settings:
         graph_on_demand_min_interval_ms=int(_env("GRAPH_ON_DEMAND_MIN_INTERVAL_MS", "120")),
         graph_on_demand_max_combinations=int(_env("GRAPH_ON_DEMAND_MAX_COMBINATIONS", "4")),
         pool_min_tvl_usd=Decimal(_env("POOL_MIN_TVL_USD", "100000")),
+        jwt_secret=_env("JWT_SECRET", "") or "",
+        jwt_access_ttl_minutes=int(_env("JWT_ACCESS_TTL_MINUTES", "15")),
+        jwt_refresh_ttl_days=int(_env("JWT_REFRESH_TTL_DAYS", "30")),
+        google_client_id=_env("GOOGLE_CLIENT_ID", "") or "",
+        stripe_secret_key=_env("STRIPE_SECRET_KEY", "") or "",
+        stripe_webhook_secret=_env("STRIPE_WEBHOOK_SECRET", "") or "",
+        stripe_success_url=_env("STRIPE_SUCCESS_URL", "") or "",
+        stripe_cancel_url=_env("STRIPE_CANCEL_URL", "") or "",
     )

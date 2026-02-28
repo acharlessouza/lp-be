@@ -62,3 +62,43 @@ class SimulationDataNotFoundError(DomainError):
 
 class PoolVolumeHistoryInputError(DomainError):
     """Parametros invalidos para historico de volume da pool."""
+
+
+class AuthError(DomainError):
+    """Erro base de autenticacao/autorizacao."""
+
+
+class EmailAlreadyExistsError(AuthError):
+    """Ja existe usuario cadastrado com este email."""
+
+
+class InvalidCredentialsError(AuthError):
+    """Credenciais invalidas."""
+
+
+class UserInactiveError(AuthError):
+    """Usuario inativo."""
+
+
+class UnauthorizedError(AuthError):
+    """Token invalido ou ausente."""
+
+
+class RefreshSessionInvalidError(AuthError):
+    """Sessao de refresh invalida ou expirada."""
+
+
+class GoogleTokenValidationError(AuthError):
+    """Falha ao validar id_token do Google."""
+
+
+class PlanNotFoundError(DomainError):
+    """Plano nao encontrado."""
+
+
+class FeatureAccessDeniedError(AuthError):
+    """Usuario nao possui acesso a feature solicitada."""
+
+
+class BillingError(DomainError):
+    """Erro no fluxo de billing/Stripe."""
