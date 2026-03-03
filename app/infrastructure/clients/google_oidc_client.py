@@ -18,6 +18,12 @@ class GoogleOidcClient(GoogleOauthPort):
         except Exception as exc:  # pragma: no cover - depends on external validation errors
             raise GoogleTokenValidationError("Invalid Google id_token.") from exc
 
+        issuer = str(payload.get("iss", ""))
+        if issuer not in {"https://accounts.google.com", "accounts.google.com"}:
+            raise GoogleTokenValidationError("Invalid Google id_token issuer.")
+        if str(payload.get("aud", "")) != self._client_id:
+            raise GoogleTokenValidationError("Invalid Google id_token audience.")
+
         email = payload.get("email")
         subject = payload.get("sub")
         if not email or not subject:

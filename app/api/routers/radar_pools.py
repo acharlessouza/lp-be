@@ -3,17 +3,17 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.auth import require_jwt
-from app.api.deps import get_discover_pools_use_case
-from app.api.schemas.discover_pools import DiscoverPoolResponseItem, DiscoverPoolsResponse
-from app.application.dto.discover_pools import DiscoverPoolsInput
-from app.application.use_cases.discover_pools import DiscoverPoolsUseCase
-from app.domain.exceptions import DiscoverPoolsInputError
+from app.api.deps import get_radar_pools_use_case
+from app.api.schemas.radar_pools import RadarPoolResponseItem, RadarPoolsResponse
+from app.application.dto.radar_pools import RadarPoolsInput
+from app.application.use_cases.radar_pools import RadarPoolsUseCase
+from app.domain.exceptions import RadarPoolsInputError
 
 router = APIRouter()
 
 
-@router.get("/v1/discover/pools", response_model=DiscoverPoolsResponse)
-def discover_pools(
+@router.get("/v1/radar/pools", response_model=RadarPoolsResponse)
+def radar_pools(
     network_id: int | None = None,
     exchange_id: int | None = None,
     token_symbol: str | None = None,
@@ -23,11 +23,11 @@ def discover_pools(
     order_by: str = "average_apr",
     order_dir: str = "desc",
     _token: str = Depends(require_jwt),
-    use_case: DiscoverPoolsUseCase = Depends(get_discover_pools_use_case),
+    use_case: RadarPoolsUseCase = Depends(get_radar_pools_use_case),
 ):
     try:
         result = use_case.execute(
-            DiscoverPoolsInput(
+            RadarPoolsInput(
                 network_id=network_id,
                 exchange_id=exchange_id,
                 token_symbol=token_symbol,
@@ -38,20 +38,28 @@ def discover_pools(
                 order_dir=order_dir,
             )
         )
-    except DiscoverPoolsInputError as exc:
+    except RadarPoolsInputError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return DiscoverPoolsResponse(
+    return RadarPoolsResponse(
         page=result.page,
         page_size=result.page_size,
         total=result.total,
         data=[
-            DiscoverPoolResponseItem(
+            RadarPoolResponseItem(
                 pool_id=item.pool_id,
                 pool_address=item.pool_address,
                 pool_name=item.pool_name,
                 network=item.network,
                 exchange=item.exchange,
+                dex_id=item.dex_id,
+                chain_id=item.chain_id,
+                token0_address=item.token0_address,
+                token1_address=item.token1_address,
+                token0_symbol=item.token0_symbol,
+                token1_symbol=item.token1_symbol,
+                token0_icon_url=item.token0_icon_url,
+                token1_icon_url=item.token1_icon_url,
                 fee_tier=item.fee_tier,
                 average_apr=item.average_apr,
                 price_volatility=item.price_volatility,

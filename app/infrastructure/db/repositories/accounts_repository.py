@@ -12,6 +12,7 @@ from app.application.ports.entitlements_port import EntitlementsPort
 from app.infrastructure.db.mappers.accounts_mapper import (
     map_row_to_auth_identity,
     map_row_to_auth_session,
+    map_row_to_password_reset_token,
     map_row_to_plan,
     map_row_to_plan_feature_grant,
     map_row_to_plan_price,
@@ -357,6 +358,112 @@ class SqlAccountsRepository(AuthPort, EntitlementsPort):
         """
         with self._begin() as conn:
             conn.execute(text(sql), {"session_id": session_id, "revoked_at": revoked_at})
+
+    def revoke_sessions_for_user(self, *, user_id: str, revoked_at: datetime) -> None:
+        sql = """
+            UPDATE public.auth_sessions
+            SET revoked_at = :revoked_at
+            WHERE user_id = :user_id
+              AND revoked_at IS NULL
+        """
+        with self._begin() as conn:
+            conn.execute(text(sql), {"user_id": user_id, "revoked_at": revoked_at})
+
+    def create_password_reset_token(
+        self,
+        *,
+        token_id: str,
+        user_id: str,
+        token_hash: str,
+        expires_at: datetime,
+        used_at: datetime | None,
+        created_at: datetime,
+        requested_ip: str | None,
+        user_agent: str | None,
+    ):
+        sql = """
+            INSERT INTO public.password_reset_tokens (
+                id, user_id, token_hash, expires_at, used_at, created_at, requested_ip, user_agent
+            ) VALUES (
+                :id, :user_id, :token_hash, :expires_at, :used_at, :created_at, :requested_ip, :user_agent
+            )
+            RETURNING id, user_id, token_hash, expires_at, used_at, created_at, requested_ip, user_agent
+        """
+        params = {
+            "id": token_id,
+            "user_id": user_id,
+            "token_hash": token_hash,
+            "expires_at": expires_at,
+            "used_at": used_at,
+            "created_at": created_at,
+            "requested_ip": requested_ip,
+            "user_agent": user_agent,
+        }
+        with self._begin() as conn:
+            row = conn.execute(text(sql), params).mappings().one()
+        return map_row_to_password_reset_token(row)
+
+    def get_password_reset_token_by_hash(self, *, token_hash: str):
+        sql = """
+            SELECT id, user_id, token_hash, expires_at, used_at, created_at, requested_ip, user_agent
+            FROM public.password_reset_tokens
+            WHERE token_hash = :token_hash
+            LIMIT 1
+        """
+        with self._connect() as conn:
+            row = conn.execute(text(sql), {"token_hash": token_hash}).mappings().first()
+        if row is None:
+            return None
+        return map_row_to_password_reset_token(row)
+
+    def mark_password_reset_token_used(self, *, token_id: str, used_at: datetime) -> None:
+        sql = """
+            UPDATE public.password_reset_tokens
+            SET used_at = :used_at
+            WHERE id = :token_id
+              AND used_at IS NULL
+        """
+        with self._begin() as conn:
+            conn.execute(
+                text(sql),
+                {
+                    "token_id": token_id,
+                    "used_at": used_at,
+                },
+            )
+
+    def invalidate_password_reset_tokens_for_user(self, *, user_id: str, used_at: datetime) -> None:
+        sql = """
+            UPDATE public.password_reset_tokens
+            SET used_at = :used_at
+            WHERE user_id = :user_id
+              AND used_at IS NULL
+        """
+        with self._begin() as conn:
+            conn.execute(
+                text(sql),
+                {
+                    "user_id": user_id,
+                    "used_at": used_at,
+                },
+            )
+
+    def count_recent_password_reset_requests(self, *, user_id: str, since: datetime) -> int:
+        sql = """
+            SELECT COUNT(*) AS total
+            FROM public.password_reset_tokens
+            WHERE user_id = :user_id
+              AND created_at >= :since
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                text(sql),
+                {
+                    "user_id": user_id,
+                    "since": since,
+                },
+            ).mappings().one()
+        return int(row["total"])
 
     def get_plan_by_code(self, *, code: str):
         sql = """

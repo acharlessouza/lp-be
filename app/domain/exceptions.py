@@ -37,8 +37,8 @@ class MatchTicksInputError(DomainError):
     """Parametros invalidos para match de ticks."""
 
 
-class DiscoverPoolsInputError(DomainError):
-    """Parametros invalidos para busca no discover."""
+class RadarPoolsInputError(DomainError):
+    """Parametros invalidos para busca no radar."""
 
 
 class InvalidSimulationInputError(DomainError):
@@ -102,3 +102,7 @@ class FeatureAccessDeniedError(AuthError):
 
 class BillingError(DomainError):
     """Erro no fluxo de billing/Stripe."""
+
+
+class PasswordResetTokenInvalidError(AuthError):
+    """Token de recuperacao de senha invalido, expirado ou ja utilizado."""

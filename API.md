@@ -42,7 +42,7 @@
 - `GET /v1/exchanges/{exchange_id}/networks/{network_id}/pools`.
 - `GET /v1/pools/by-address/{pool_address}`.
 - `POST /v1/match-ticks`.
-- `GET /v1/discover/pools`.
+- `GET /v1/radar/pools`.
 
 ## POST /v1/allocate
 Entrada:
@@ -583,7 +583,7 @@ Resposta:
 }
 ```
 
-## GET /v1/discover/pools
+## GET /v1/radar/pools
 Query params:
 - `network_id` (int, opcional)
 - `exchange_id` (int, opcional)
@@ -591,18 +591,21 @@ Query params:
 - `timeframe_days` (int, 1-365, default 14)
 - `page` (int, default 1)
 - `page_size` (int, 1-100, default 10)
-- `order_by` (pool_id | pool_address | pool_name | network | exchange | fee_tier | average_apr | price_volatility | tvl_usd | correlation | avg_daily_fees_usd | daily_fees_tvl_pct | avg_daily_volume_usd | daily_volume_tvl_pct)
+- `order_by` (pool_id | pool_address | pool_name | network | exchange | dex_id | chain_id | token0_address | token1_address | token0_symbol | token1_symbol | token0_icon_url | token1_icon_url | fee_tier | average_apr | price_volatility | tvl_usd | correlation | avg_daily_fees_usd | daily_fees_tvl_pct | avg_daily_volume_usd | daily_volume_tvl_pct)
 - `order_dir` (asc | desc, default desc)
 
 Exemplo:
-`/v1/discover/pools?network_id=2&exchange_id=1&token_symbol=USDC&timeframe_days=30&page=1&page_size=10&order_by=average_apr&order_dir=desc`
+`/v1/radar/pools?network_id=2&exchange_id=1&token_symbol=USDC&timeframe_days=30&page=1&page_size=10&order_by=average_apr&order_dir=desc`
 
 Notas:
 - Implementacao interna segue arquitetura Hexagonal:
-  - adapter HTTP em `app/api/routers/discover_pools.py`
-  - use case em `app/application/use_cases/discover_pools.py`
-  - regra de dominio em `app/domain/services/discover_pools.py`
-  - SQL em `app/infrastructure/db/repositories/discover_pools_repository.py`
+  - adapter HTTP em `app/api/routers/radar_pools.py`
+  - use case em `app/application/use_cases/radar_pools.py`
+  - regra de dominio em `app/domain/services/radar_pools.py`
+  - SQL em `app/infrastructure/db/repositories/radar_pools_repository.py`
+- Fonte de dados atual do SQL:
+  - `public.pool_hourly` para agregados horarios (fees/volume/tvl)
+  - `public.pools`, `public.chains`, `public.dexes` e `public.tokens` para metadados da pool
 
 Erros possiveis:
 - `400` quando filtros/ordenacao/paginacao forem invalidos.
@@ -620,6 +623,14 @@ Resposta:
       "pool_name": "WETH / USDC",
       "network": "arbitrum",
       "exchange": "uniswap",
+      "dex_id": 1,
+      "chain_id": 2,
+      "token0_address": "0x...",
+      "token1_address": "0x...",
+      "token0_symbol": "WETH",
+      "token1_symbol": "USDC",
+      "token0_icon_url": "https://...",
+      "token1_icon_url": "https://...",
       "fee_tier": 500,
       "average_apr": "12.34",
       "price_volatility": null,
@@ -725,8 +736,15 @@ Erros possiveis:
 ## POST /v1/auth/refresh
 Sem body, usa cookie `refresh_token`.
 
-Resposta:
-- Mesmo payload de `/v1/auth/login`.
+Resposta `200`:
+```json
+{
+  "access_token": "jwt",
+  "token_type": "bearer",
+  "access_expires_at": "2026-02-27T20:00:00+00:00",
+  "refresh_expires_at": "2026-03-29T20:00:00+00:00"
+}
+```
 
 Erros possiveis:
 - `401` sessao de refresh invalida/expirada.
@@ -738,9 +756,43 @@ Invalida sessao de refresh e remove cookie.
 Resposta `200`:
 ```json
 {
-  "ok": true
+  "message": "Logged out"
 }
 ```
+
+## POST /v1/auth/password/forgot
+Request:
+```json
+{
+  "email": "alice@example.com"
+}
+```
+
+Resposta `200` (sempre):
+```json
+{
+  "message": "If the email exists, we sent instructions."
+}
+```
+
+## POST /v1/auth/password/reset
+Request:
+```json
+{
+  "token": "raw-reset-token",
+  "new_password": "new-password-123"
+}
+```
+
+Resposta `200`:
+```json
+{
+  "message": "Password updated"
+}
+```
+
+Erros possiveis:
+- `400` token invalido/expirado/ja usado ou `new_password` invalida.
 
 ## GET /v1/me
 Headers:

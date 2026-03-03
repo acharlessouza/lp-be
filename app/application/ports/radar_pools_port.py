@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
-from app.domain.entities.discover_pools import DiscoverPoolAggregate
+from app.domain.entities.radar_pools import RadarPoolAggregate
 
 
-class DiscoverPoolsPort(Protocol):
+class RadarPoolsPort(Protocol):
     def list_pools(
         self,
         *,
@@ -14,5 +14,5 @@ class DiscoverPoolsPort(Protocol):
         network_id: int | None,
         exchange_id: int | None,
         token_symbol: str | None,
-    ) -> list[DiscoverPoolAggregate]:
+    ) -> list[RadarPoolAggregate]:
         ...

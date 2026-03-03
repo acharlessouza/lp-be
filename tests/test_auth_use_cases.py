@@ -2,13 +2,17 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timedelta
+import hashlib
 
-from app.application.dto.auth import LoginGoogleInput, LoginLocalInput, RegisterUserInput
+from app.application.dto.auth import LoginGoogleInput, LoginLocalInput, RefreshSessionInput, RegisterUserInput
 from app.application.dto.auth import GoogleIdentityInfo
 from app.application.use_cases.login_google import LoginGoogleUseCase
 from app.application.use_cases.login_local import LoginLocalUseCase
+from app.application.use_cases.refresh_session import RefreshSessionUseCase
 from app.application.use_cases.register_user import RegisterUserUseCase
+from app.domain.entities.password_reset import PasswordResetToken
 from app.domain.entities.user import AuthIdentity, AuthSession, User
+from app.domain.exceptions import RefreshSessionInvalidError
 
 
 class FakeAuthPort:
@@ -16,6 +20,7 @@ class FakeAuthPort:
         self.users: dict[str, User] = {}
         self.identities: dict[str, AuthIdentity] = {}
         self.sessions: dict[str, AuthSession] = {}
+        self.password_reset_tokens: dict[str, PasswordResetToken] = {}
 
     def execute_in_transaction(self, fn):
         return fn(self)
@@ -153,6 +158,58 @@ class FakeAuthPort:
         session = self.sessions[session_id]
         self.sessions[session_id] = replace(session, revoked_at=revoked_at)
 
+    def revoke_sessions_for_user(self, *, user_id: str, revoked_at: datetime) -> None:
+        for session_id, session in list(self.sessions.items()):
+            if session.user_id == user_id and session.revoked_at is None:
+                self.sessions[session_id] = replace(session, revoked_at=revoked_at)
+
+    def create_password_reset_token(
+        self,
+        *,
+        token_id: str,
+        user_id: str,
+        token_hash: str,
+        expires_at: datetime,
+        used_at: datetime | None,
+        created_at: datetime,
+        requested_ip: str | None,
+        user_agent: str | None,
+    ) -> PasswordResetToken:
+        token = PasswordResetToken(
+            id=token_id,
+            user_id=user_id,
+            token_hash=token_hash,
+            expires_at=expires_at,
+            used_at=used_at,
+            created_at=created_at,
+            requested_ip=requested_ip,
+            user_agent=user_agent,
+        )
+        self.password_reset_tokens[token_id] = token
+        return token
+
+    def get_password_reset_token_by_hash(self, *, token_hash: str) -> PasswordResetToken | None:
+        for token in self.password_reset_tokens.values():
+            if token.token_hash == token_hash:
+                return token
+        return None
+
+    def mark_password_reset_token_used(self, *, token_id: str, used_at: datetime) -> None:
+        token = self.password_reset_tokens[token_id]
+        self.password_reset_tokens[token_id] = replace(token, used_at=used_at)
+
+    def invalidate_password_reset_tokens_for_user(self, *, user_id: str, used_at: datetime) -> None:
+        for token_id, token in list(self.password_reset_tokens.items()):
+            if token.user_id == user_id and token.used_at is None:
+                self.password_reset_tokens[token_id] = replace(token, used_at=used_at)
+
+    def count_recent_password_reset_requests(self, *, user_id: str, since: datetime) -> int:
+        return sum(
+            1
+            for token in self.password_reset_tokens.values()
+            if token.user_id == user_id and token.created_at >= since
+        )
+
 
 class FakePasswordHasher:
     def hash(self, plain_password: str) -> str:
@@ -173,6 +230,9 @@ class FakePasswordHasherWithRehash(FakePasswordHasher):
 
 
 class FakeTokenPort:
+    def __init__(self):
+        self._refresh_seq = 0
+
     def create_access_token(self, *, user_id: str, now: datetime) -> tuple[str, datetime]:
         return f"access-{user_id}", now + timedelta(minutes=15)
 
@@ -181,10 +241,11 @@ class FakeTokenPort:
         raise NotImplementedError
 
     def generate_refresh_token(self) -> str:
-        return "refresh-token"
+        self._refresh_seq += 1
+        return f"refresh-token-{self._refresh_seq}"
 
     def hash_refresh_token(self, *, refresh_token: str) -> str:
-        return f"hash::{refresh_token}"
+        return hashlib.sha256(refresh_token.encode("utf-8")).hexdigest()
 
     def refresh_token_expires_at(self, *, now: datetime) -> datetime:
         return now + timedelta(days=30)
@@ -226,10 +287,11 @@ def test_login_local_returns_tokens_and_creates_session():
         RegisterUserInput(name="User", email="user@example.com", password="12345678")
     )
 
+    token_port = FakeTokenPort()
     login_use_case = LoginLocalUseCase(
         auth_port=auth_port,
         password_hasher=FakePasswordHasher(),
-        token_port=FakeTokenPort(),
+        token_port=token_port,
     )
     output = login_use_case.execute(
         LoginLocalInput(
@@ -242,7 +304,7 @@ def test_login_local_returns_tokens_and_creates_session():
 
     assert output.user.id == register_output.user.id
     assert output.access_token.startswith("access-")
-    assert output.refresh_token == "refresh-token"
+    assert output.refresh_token.startswith("refresh-token-")
     assert len(auth_port.sessions) == 1
 
 
@@ -274,6 +336,26 @@ def test_login_google_links_existing_user_by_email_and_creates_google_identity()
     )
     assert google_identity is not None
     assert google_identity.provider_subject == "google-sub-1"
+
+
+def test_login_google_creates_user_when_email_not_exists():
+    auth_port = FakeAuthPort()
+    use_case = LoginGoogleUseCase(
+        auth_port=auth_port,
+        google_oauth_port=FakeGoogleOauthPort(),
+        token_port=FakeTokenPort(),
+    )
+
+    output = use_case.execute(
+        LoginGoogleInput(
+            id_token="token-google",
+            user_agent="pytest",
+            ip="127.0.0.1",
+        )
+    )
+    assert output.user.email == "user@example.com"
+    google_identity = auth_port.get_identity_for_user_provider(user_id=output.user.id, provider="google")
+    assert google_identity is not None
 
 
 def test_register_user_accepts_password_longer_than_72_bytes():
@@ -321,3 +403,56 @@ def test_login_local_rehashes_legacy_hash_on_successful_login():
     )
     assert updated_identity is not None
     assert updated_identity.password_hash == "argon2::12345678"
+
+
+def test_refresh_session_rotates_token_and_revokes_previous_session():
+    auth_port = FakeAuthPort()
+    token_port = FakeTokenPort()
+    register_use_case = RegisterUserUseCase(auth_port=auth_port, password_hasher=FakePasswordHasher())
+    register_use_case.execute(RegisterUserInput(name="User", email="user@example.com", password="12345678"))
+    login_use_case = LoginLocalUseCase(
+        auth_port=auth_port,
+        password_hasher=FakePasswordHasher(),
+        token_port=token_port,
+    )
+    first_login = login_use_case.execute(
+        LoginLocalInput(
+            email="user@example.com",
+            password="12345678",
+            user_agent="pytest",
+            ip="127.0.0.1",
+        )
+    )
+    first_session = next(iter(auth_port.sessions.values()))
+    assert first_session.revoked_at is None
+
+    refresh_use_case = RefreshSessionUseCase(auth_port=auth_port, token_port=token_port)
+    refreshed = refresh_use_case.execute(
+        command=RefreshSessionInput(
+            refresh_token=first_login.refresh_token,
+            user_agent="pytest",
+            ip="127.0.0.1",
+        )
+    )
+    assert refreshed.refresh_token != first_login.refresh_token
+    revoked_sessions = [s for s in auth_port.sessions.values() if s.revoked_at is not None]
+    active_sessions = [s for s in auth_port.sessions.values() if s.revoked_at is None]
+    assert len(revoked_sessions) == 1
+    assert len(active_sessions) == 1
+
+
+def test_refresh_session_invalid_token_returns_error():
+    auth_port = FakeAuthPort()
+    token_port = FakeTokenPort()
+    use_case = RefreshSessionUseCase(auth_port=auth_port, token_port=token_port)
+    try:
+        use_case.execute(
+            command=RefreshSessionInput(
+                refresh_token="invalid",
+                user_agent="pytest",
+                ip="127.0.0.1",
+            )
+        )
+    except RefreshSessionInvalidError:
+        return
+    raise AssertionError("Expected RefreshSessionInvalidError")

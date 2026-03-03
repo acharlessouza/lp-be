@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from app.domain.entities.feature import PlanFeatureGrant
+from app.domain.entities.password_reset import PasswordResetToken
 from app.domain.entities.plan import Plan, PlanPrice
 from app.domain.entities.subscription import Subscription
 from app.domain.entities.user import AuthIdentity, AuthSession, User
@@ -94,4 +95,17 @@ def map_row_to_subscription(row: Mapping[str, Any]) -> Subscription:
         external_subscription_id=row.get("external_subscription_id"),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+    )
+
+
+def map_row_to_password_reset_token(row: Mapping[str, Any]) -> PasswordResetToken:
+    return PasswordResetToken(
+        id=_as_str(row["id"]),
+        user_id=_as_str(row["user_id"]),
+        token_hash=row["token_hash"],
+        expires_at=row["expires_at"],
+        used_at=row.get("used_at"),
+        created_at=row["created_at"],
+        requested_ip=row.get("requested_ip"),
+        user_agent=row.get("user_agent"),
     )

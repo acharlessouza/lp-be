@@ -7,8 +7,9 @@ from fastapi import Depends, Header, HTTPException
 from app.application.use_cases.create_checkout_session import CreateCheckoutSessionUseCase
 from app.application.use_cases.get_me import GetMeUseCase
 from app.application.use_cases.get_user_entitlements import GetUserEntitlementsUseCase
+from app.application.use_cases.forgot_password import ForgotPasswordUseCase
 from app.application.use_cases.allocate import AllocateUseCase
-from app.application.use_cases.discover_pools import DiscoverPoolsUseCase
+from app.application.use_cases.radar_pools import RadarPoolsUseCase
 from app.application.use_cases.estimate_fees import EstimateFeesUseCase
 from app.application.use_cases.get_liquidity_distribution import GetLiquidityDistributionUseCase
 from app.application.use_cases.get_liquidity_distribution_default_range import (
@@ -31,6 +32,7 @@ from app.application.use_cases.match_ticks import MatchTicksUseCase
 from app.application.use_cases.logout_session import LogoutSessionUseCase
 from app.application.use_cases.process_stripe_webhook import ProcessStripeWebhookUseCase
 from app.application.use_cases.refresh_session import RefreshSessionUseCase
+from app.application.use_cases.reset_password import ResetPasswordUseCase
 from app.application.use_cases.register_user import RegisterUserUseCase
 from app.application.use_cases.simulate_apr import SimulateAprUseCase
 from app.application.use_cases.simulate_apr_v2 import SimulateAprV2UseCase
@@ -45,7 +47,7 @@ from app.infrastructure.db.repositories.allocation_pool_repository import (
     SqlAllocationPoolRepository,
 )
 from app.infrastructure.db.repositories.catalog_query_repository import SqlCatalogQueryRepository
-from app.infrastructure.db.repositories.discover_pools_repository import SqlDiscoverPoolsRepository
+from app.infrastructure.db.repositories.radar_pools_repository import SqlRadarPoolsRepository
 from app.infrastructure.db.repositories.estimated_fees_repository import SqlEstimatedFeesRepository
 from app.infrastructure.db.repositories.liquidity_distribution_repository import (
     SqlLiquidityDistributionRepository,
@@ -154,6 +156,26 @@ def _get_stripe_client() -> StripeClient:
     )
 
 
+@lru_cache(maxsize=1)
+def _get_email_sender():
+    from app.infrastructure.clients.email_sender import ConsoleEmailSender, SMTPEmailSender
+
+    settings = get_settings()
+    if settings.email_sender_mode == "console":
+        return ConsoleEmailSender()
+    if settings.email_sender_mode == "smtp":
+        if not settings.smtp_host or not settings.smtp_from:
+            raise HTTPException(status_code=500, detail="SMTP_HOST and SMTP_FROM are required for smtp mode.")
+        return SMTPEmailSender(
+            host=settings.smtp_host,
+            port=settings.smtp_port,
+            user=settings.smtp_user,
+            password=settings.smtp_pass,
+            sender=settings.smtp_from,
+        )
+    raise HTTPException(status_code=500, detail="EMAIL_SENDER_MODE must be console or smtp.")
+
+
 def get_allocate_use_case() -> AllocateUseCase:
     pool_port = SqlAllocationPoolRepository(_get_db_engine())
     price_port = PriceServiceAdapter(_get_price_service())
@@ -220,8 +242,8 @@ def get_estimate_fees_use_case() -> EstimateFeesUseCase:
     return EstimateFeesUseCase(estimated_fees_port=SqlEstimatedFeesRepository(_get_db_engine()))
 
 
-def get_discover_pools_use_case() -> DiscoverPoolsUseCase:
-    return DiscoverPoolsUseCase(discover_pools_port=SqlDiscoverPoolsRepository(_get_db_engine()))
+def get_radar_pools_use_case() -> RadarPoolsUseCase:
+    return RadarPoolsUseCase(radar_pools_port=SqlRadarPoolsRepository(_get_db_engine()))
 
 
 def get_simulate_apr_use_case() -> SimulateAprUseCase:
@@ -306,6 +328,26 @@ def get_process_stripe_webhook_use_case() -> ProcessStripeWebhookUseCase:
         auth_port=_get_accounts_repository(),
         entitlements_port=_get_accounts_repository(),
         stripe_port=_get_stripe_client(),
+    )
+
+
+def get_forgot_password_use_case() -> ForgotPasswordUseCase:
+    settings = get_settings()
+    if not settings.frontend_base_url:
+        raise HTTPException(status_code=500, detail="FRONTEND_BASE_URL is required.")
+    return ForgotPasswordUseCase(
+        auth_port=_get_accounts_repository(),
+        token_port=_get_token_service(),
+        email_sender=_get_email_sender(),
+        frontend_base_url=settings.frontend_base_url,
+    )
+
+
+def get_reset_password_use_case() -> ResetPasswordUseCase:
+    return ResetPasswordUseCase(
+        auth_port=_get_accounts_repository(),
+        token_port=_get_token_service(),
+        password_hasher=_get_password_hasher(),
     )
 
 

@@ -5,19 +5,25 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response
 
 from app.api.deps import (
+    get_forgot_password_use_case,
     get_login_google_use_case,
     get_login_local_use_case,
     get_logout_session_use_case,
     get_refresh_session_use_case,
+    get_reset_password_use_case,
     get_register_user_use_case,
 )
 from app.api.schemas.auth import (
     AuthTokenResponse,
+    ForgotPasswordRequest,
+    GenericMessageResponse,
     LogoutResponse,
     GoogleLoginRequest,
     LoginRequest,
+    RefreshTokenResponse,
     RegisterRequest,
     RegisterResponse,
+    ResetPasswordRequest,
 )
 from app.application.dto.auth import (
     LoginGoogleInput,
@@ -26,18 +32,23 @@ from app.application.dto.auth import (
     RefreshSessionInput,
     RegisterUserInput,
 )
+from app.application.dto.password_reset import ForgotPasswordInput, ResetPasswordInput
+from app.application.use_cases.forgot_password import ForgotPasswordUseCase
 from app.application.use_cases.login_google import LoginGoogleUseCase
 from app.application.use_cases.login_local import LoginLocalUseCase
 from app.application.use_cases.logout_session import LogoutSessionUseCase
 from app.application.use_cases.refresh_session import RefreshSessionUseCase
 from app.application.use_cases.register_user import RegisterUserUseCase
+from app.application.use_cases.reset_password import ResetPasswordUseCase
 from app.domain.exceptions import (
     EmailAlreadyExistsError,
     GoogleTokenValidationError,
     InvalidCredentialsError,
+    PasswordResetTokenInvalidError,
     RefreshSessionInvalidError,
     UserInactiveError,
 )
+from app.shared.config import get_settings
 
 
 router = APIRouter()
@@ -45,15 +56,35 @@ router = APIRouter()
 REFRESH_COOKIE_NAME = "refresh_token"
 
 
-def _set_refresh_cookie(response: Response, refresh_token: str, max_age_seconds: int) -> None:
+def _set_refresh_cookie(
+    response: Response,
+    refresh_token: str,
+    max_age_seconds: int,
+    expires_at: datetime,
+) -> None:
+    settings = get_settings()
+    samesite = settings.auth_cookie_samesite
+    if samesite not in {"lax", "strict", "none"}:
+        raise HTTPException(status_code=500, detail="AUTH_COOKIE_SAMESITE must be lax, strict or none.")
     response.set_cookie(
         key=REFRESH_COOKIE_NAME,
         value=refresh_token,
         httponly=True,
-        samesite="lax",
-        secure=False,
+        samesite=samesite,
+        secure=settings.auth_cookie_secure,
+        domain=settings.auth_cookie_domain or None,
         max_age=max_age_seconds,
-        path="/v1/auth",
+        expires=expires_at,
+        path="/",
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    settings = get_settings()
+    response.delete_cookie(
+        key=REFRESH_COOKIE_NAME,
+        path="/",
+        domain=settings.auth_cookie_domain or None,
     )
 
 
@@ -117,6 +148,7 @@ def login_local(
         response,
         output.refresh_token,
         max_age_seconds=_cookie_max_age_seconds(output.refresh_expires_at),
+        expires_at=output.refresh_expires_at,
     )
     return AuthTokenResponse(
         access_token=output.access_token,
@@ -157,6 +189,7 @@ def login_google(
         response,
         output.refresh_token,
         max_age_seconds=_cookie_max_age_seconds(output.refresh_expires_at),
+        expires_at=output.refresh_expires_at,
     )
     return AuthTokenResponse(
         access_token=output.access_token,
@@ -172,7 +205,7 @@ def login_google(
     )
 
 
-@router.post("/v1/auth/refresh", response_model=AuthTokenResponse)
+@router.post("/v1/auth/refresh", response_model=RefreshTokenResponse)
 def refresh_auth(
     response: Response,
     refresh_token_cookie: str | None = Cookie(default=None, alias=REFRESH_COOKIE_NAME),
@@ -200,18 +233,12 @@ def refresh_auth(
         response,
         output.refresh_token,
         max_age_seconds=_cookie_max_age_seconds(output.refresh_expires_at),
+        expires_at=output.refresh_expires_at,
     )
-    return AuthTokenResponse(
+    return RefreshTokenResponse(
         access_token=output.access_token,
         access_expires_at=output.access_expires_at,
         refresh_expires_at=output.refresh_expires_at,
-        user={
-            "id": output.user.id,
-            "name": output.user.name,
-            "email": output.user.email,
-            "email_verified": output.user.email_verified,
-            "is_active": output.user.is_active,
-        },
     )
 
 
@@ -223,5 +250,41 @@ def logout_auth(
 ):
     if refresh_token_cookie:
         use_case.execute(LogoutInput(refresh_token=refresh_token_cookie))
-    response.delete_cookie(key=REFRESH_COOKIE_NAME, path="/v1/auth")
-    return LogoutResponse(ok=True)
+    _clear_refresh_cookie(response)
+    return LogoutResponse(message="Logged out")
+
+
+@router.post("/v1/auth/password/forgot", response_model=GenericMessageResponse)
+def forgot_password(
+    req: ForgotPasswordRequest,
+    user_agent: str | None = Header(default=None),
+    x_forwarded_for: str | None = Header(default=None),
+    use_case: ForgotPasswordUseCase = Depends(get_forgot_password_use_case),
+):
+    output = use_case.execute(
+        ForgotPasswordInput(
+            email=req.email,
+            user_agent=user_agent,
+            ip=x_forwarded_for,
+        )
+    )
+    return GenericMessageResponse(message=output.message)
+
+
+@router.post("/v1/auth/password/reset", response_model=GenericMessageResponse)
+def reset_password(
+    req: ResetPasswordRequest,
+    use_case: ResetPasswordUseCase = Depends(get_reset_password_use_case),
+):
+    try:
+        output = use_case.execute(
+            ResetPasswordInput(
+                token=req.token,
+                new_password=req.new_password,
+            )
+        )
+    except PasswordResetTokenInvalidError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return GenericMessageResponse(message=output.message)

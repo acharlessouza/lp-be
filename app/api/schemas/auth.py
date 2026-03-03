@@ -20,6 +20,15 @@ class GoogleLoginRequest(BaseModel):
     id_token: str = Field(..., min_length=1)
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255)
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=8, max_length=512)
+
+
 class AuthUserResponse(BaseModel):
     id: str
     name: str
@@ -40,5 +49,16 @@ class AuthTokenResponse(BaseModel):
     user: AuthUserResponse
 
 
+class RefreshTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    access_expires_at: datetime
+    refresh_expires_at: datetime
+
+
 class LogoutResponse(BaseModel):
-    ok: bool
+    message: str
+
+
+class GenericMessageResponse(BaseModel):
+    message: str

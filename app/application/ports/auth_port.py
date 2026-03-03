@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Callable, Protocol, TypeVar
 
+from app.domain.entities.password_reset import PasswordResetToken
 from app.domain.entities.user import AuthIdentity, AuthProvider, AuthSession, User
 
 
@@ -96,4 +97,33 @@ class AuthPort(Protocol):
         ...
 
     def revoke_session(self, *, session_id: str, revoked_at: datetime) -> None:
+        ...
+
+    def revoke_sessions_for_user(self, *, user_id: str, revoked_at: datetime) -> None:
+        ...
+
+    def create_password_reset_token(
+        self,
+        *,
+        token_id: str,
+        user_id: str,
+        token_hash: str,
+        expires_at: datetime,
+        used_at: datetime | None,
+        created_at: datetime,
+        requested_ip: str | None,
+        user_agent: str | None,
+    ) -> PasswordResetToken:
+        ...
+
+    def get_password_reset_token_by_hash(self, *, token_hash: str) -> PasswordResetToken | None:
+        ...
+
+    def mark_password_reset_token_used(self, *, token_id: str, used_at: datetime) -> None:
+        ...
+
+    def invalidate_password_reset_tokens_for_user(self, *, user_id: str, used_at: datetime) -> None:
+        ...
+
+    def count_recent_password_reset_requests(self, *, user_id: str, since: datetime) -> int:
         ...

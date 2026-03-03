@@ -22,6 +22,18 @@ def _json(name: str) -> dict:
     return json.loads(value)
 
 
+def _bool(name: str, default: bool) -> bool:
+    raw = _env(name, "true" if default else "false")
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _csv(name: str, default: str = "") -> list[str]:
+    raw = _env(name, default) or default
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 @dataclass(frozen=True)
 class Settings:
     price_overrides: dict
@@ -47,6 +59,17 @@ class Settings:
     stripe_webhook_secret: str
     stripe_success_url: str
     stripe_cancel_url: str
+    auth_cookie_secure: bool
+    auth_cookie_samesite: str
+    auth_cookie_domain: str | None
+    frontend_base_url: str
+    email_sender_mode: str
+    smtp_host: str
+    smtp_port: int
+    smtp_user: str
+    smtp_pass: str
+    smtp_from: str
+    cors_allow_origins: list[str]
 
 
 def get_settings() -> Settings:
@@ -88,4 +111,18 @@ def get_settings() -> Settings:
         stripe_webhook_secret=_env("STRIPE_WEBHOOK_SECRET", "") or "",
         stripe_success_url=_env("STRIPE_SUCCESS_URL", "") or "",
         stripe_cancel_url=_env("STRIPE_CANCEL_URL", "") or "",
+        auth_cookie_secure=_bool("AUTH_COOKIE_SECURE", False),
+        auth_cookie_samesite=(_env("AUTH_COOKIE_SAMESITE", "lax") or "lax").lower(),
+        auth_cookie_domain=_env("AUTH_COOKIE_DOMAIN"),
+        frontend_base_url=_env("FRONTEND_BASE_URL", "") or "",
+        email_sender_mode=(_env("EMAIL_SENDER_MODE", "console") or "console").lower(),
+        smtp_host=_env("SMTP_HOST", "") or "",
+        smtp_port=int(_env("SMTP_PORT", "587")),
+        smtp_user=_env("SMTP_USER", "") or "",
+        smtp_pass=_env("SMTP_PASS", "") or "",
+        smtp_from=_env("SMTP_FROM", "") or "",
+        cors_allow_origins=_csv(
+            "CORS_ALLOW_ORIGINS",
+            "http://localhost:5173,http://localhost:3000",
+        ),
     )

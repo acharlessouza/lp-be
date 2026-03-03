@@ -7,7 +7,7 @@ from .api.routers.allocate import router as allocate_router
 from .api.routers.auth import router as auth_router
 from .api.routers.billing import router as billing_router
 from .api.routers.catalog import router as catalog_router
-from .api.routers.discover_pools import router as discover_pools_router
+from .api.routers.radar_pools import router as radar_pools_router
 from .api.routers.estimated_fees import router as estimated_fees_router
 from .api.routers.liquidity_distribution import router as liquidity_distribution_router
 from .api.routers.match_ticks import router as match_ticks_router
@@ -16,11 +16,14 @@ from .api.routers.pool_price import router as pool_price_router
 from .api.routers.pool_volume_history import router as pool_volume_history_router
 from .api.routers.simulate_apr import router as simulate_apr_router
 from .api.routers.simulate_apr_v2 import router as simulate_apr_v2_router
+from .shared.config import get_settings
 
 app = FastAPI(title="LP API")
+settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_allow_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -32,7 +35,7 @@ app.include_router(pool_volume_history_router)
 app.include_router(liquidity_distribution_router)
 app.include_router(match_ticks_router)
 app.include_router(estimated_fees_router)
-app.include_router(discover_pools_router)
+app.include_router(radar_pools_router)
 app.include_router(simulate_apr_router)
 app.include_router(simulate_apr_v2_router)
 app.include_router(auth_router)
